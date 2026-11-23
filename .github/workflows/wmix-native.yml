@@ -1,4 +1,4 @@
-name: WMIX native indicator
+name:LR2 native indicator
 on:
   workflow_dispatch:
     inputs:
