@@ -2,7 +2,7 @@ name: OpenLR2 native indicator
 on:
   push:
     branches: [main]
-    paths: ['.github/workflows/OpenLR2-native.yml']
+    paths: ['.github/workflows/OpenLR2-native.yml', 'OpenLR2_SelectRadar_Addon.zip']
   workflow_dispatch:
     inputs:
       revision:
@@ -82,6 +82,20 @@ jobs:
           git apply --check --ignore-space-change indicator.patch
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           git apply --ignore-space-change indicator.patch
+      - name: Read chart and player radar
+        uses: actions/checkout@v4
+        with:
+          path: radar-payload
+          sparse-checkout: OpenLR2_SelectRadar_Addon.zip
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Apply select radar
+        shell: pwsh
+        run: |
+          Expand-Archive radar-payload/OpenLR2_SelectRadar_Addon.zip radar-source
+          git apply --check --ignore-space-change radar-source/OpenLR2_SelectRadar.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git apply --ignore-space-change radar-source/OpenLR2_SelectRadar.patch
       - name: Configure
         run: cmake --preset windows-vs-x64
         env:
@@ -93,10 +107,15 @@ jobs:
       - name: Package
         run: |
           Expand-Archive skin.zip stage
+          Copy-Item radar-source/LR2files stage/ -Recurse -Force
           Copy-Item out/windows-vs-x64/RelWithDebInfo/OpenLR2_x64.exe "stage/OpenLR2_indicator Patched.exe"
           Copy-Item dep/FMOD/bin64/fmod.dll stage/
+          $select = 'LR2files/Theme/KCOOL_WMIX_FHD/WMIX/select'
+          foreach ($file in @('OpenLR2_indicator Patched.exe', 'fmod.dll', "$select/select_radar.lr2skin", "$select/radar/song.png", "$select/radar/player.png", "$select/radar/shadows.png")) {
+            if (!(Test-Path -LiteralPath (Join-Path stage $file) -PathType Leaf)) { throw "Missing package file $file" }
+          }
       - uses: actions/upload-artifact@v4
         with:
-          name: OpenLR2_Result_SongData_x64
+          name: OpenLR2_SelectRadar_x64
           path: stage/
           if-no-files-found: error
