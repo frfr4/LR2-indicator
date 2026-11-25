@@ -1,8 +1,8 @@
-name: OpenLR2 v30.2 footer typography
+name: OpenLR2 v31 calibrated radar
 on:
   push:
-    branches: [radar-v30-2-test]
-    paths: ['.github/workflows/OpenLR2-native.yml', 'OpenLR2_SelectRadar_Addon.zip', 'MinaCalc527_Addon.zip', 'RadarV28_Addon.zip', 'RadarV29_Addon.zip', 'RadarV30_Addon.zip', 'RadarV302_Addon.zip']
+    branches: [radar-v31-calibration-test]
+    paths: ['.github/workflows/OpenLR2-native.yml', 'OpenLR2_SelectRadar_Addon.zip', 'MinaCalc527_Addon.zip', 'RadarV28_Addon.zip', 'RadarV29_Addon.zip', 'RadarV30_Addon.zip', 'RadarV302_Addon.zip', 'RadarV31_Addon.zip']
   workflow_dispatch:
     inputs:
       revision:
@@ -93,6 +93,7 @@ jobs:
             RadarV29_Addon.zip
             RadarV30_Addon.zip
             RadarV302_Addon.zip
+            RadarV31_Addon.zip
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: Apply select radar
@@ -127,6 +128,12 @@ jobs:
           git apply --check --ignore-space-change footer-source/RadarV302.patch
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           git apply --ignore-space-change footer-source/RadarV302.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Expand-Archive radar-payload/RadarV31_Addon.zip calibrated-source
+          git apply --check --ignore-space-change calibrated-source/RadarV31.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git apply --ignore-space-change calibrated-source/RadarV31.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Configure
         run: cmake --preset windows-vs-x64
         env:
@@ -149,6 +156,7 @@ jobs:
           Copy-Item range-source/LR2files stage/ -Recurse -Force
           Copy-Item text-source/LR2files stage/ -Recurse -Force
           Copy-Item footer-source/LR2files stage/ -Recurse -Force
+          Copy-Item calibrated-source/charts-v31.tsv stage/LR2files/Theme/KCOOL_WMIX_FHD/WMIX/select/radar/
           Copy-Item mina-source/licenses stage/ -Recurse -Force
           Copy-Item out/windows-vs-x64/RelWithDebInfo/OpenLR2_x64.exe "stage/OpenLR2_indicator Patched.exe"
           Copy-Item dep/FMOD/bin64/fmod.dll stage/
@@ -158,7 +166,7 @@ jobs:
           }
       - uses: actions/upload-artifact@v4
         with:
-          name: OpenLR2_v30_2_Radar_x64
+          name: OpenLR2_v31_Radar_x64
           path: stage/
           if-no-files-found: error
       - name: Check native select radar pixels
@@ -188,7 +196,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: OpenLR2_v30_2_RenderChecks
+          name: OpenLR2_v31_RenderChecks
           path: |
             native-frames/*.png
             native-frames/Log.txt
