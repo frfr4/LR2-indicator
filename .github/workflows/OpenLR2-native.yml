@@ -1,8 +1,8 @@
-name: OpenLR2 v29 radar text
+name: OpenLR2 v30 fixed radar labels and joins
 on:
   push:
-    branches: [radar-v29-test]
-    paths: ['.github/workflows/OpenLR2-native.yml', 'OpenLR2_SelectRadar_Addon.zip', 'MinaCalc527_Addon.zip', 'RadarV28_Addon.zip', 'RadarV29_Addon.zip']
+    branches: [radar-v30-test]
+    paths: ['.github/workflows/OpenLR2-native.yml', 'OpenLR2_SelectRadar_Addon.zip', 'MinaCalc527_Addon.zip', 'RadarV28_Addon.zip', 'RadarV29_Addon.zip', 'RadarV30_Addon.zip']
   workflow_dispatch:
     inputs:
       revision:
@@ -91,6 +91,7 @@ jobs:
             MinaCalc527_Addon.zip
             RadarV28_Addon.zip
             RadarV29_Addon.zip
+            RadarV30_Addon.zip
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: Apply select radar
@@ -115,6 +116,11 @@ jobs:
           git apply --check --ignore-space-change text-source/RadarV29.patch
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           git apply --ignore-space-change text-source/RadarV29.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Expand-Archive radar-payload/RadarV30_Addon.zip outline-source
+          git apply --check --ignore-space-change outline-source/RadarV30.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git apply --ignore-space-change outline-source/RadarV30.patch
       - name: Configure
         run: cmake --preset windows-vs-x64
         env:
@@ -143,8 +149,31 @@ jobs:
           foreach ($file in @('OpenLR2_indicator Patched.exe', 'fmod.dll', "$select/select_radar.lr2skin", "$select/radar/song.png", "$select/radar/player.png", "$select/radar/shadows.png", "$select/radar/rating-text-v29.png")) {
             if (!(Test-Path -LiteralPath (Join-Path stage $file) -PathType Leaf)) { throw "Missing package file $file" }
           }
+      - name: Check native select radar pixels
+        shell: pwsh
+        run: |
+          cmake --build --preset windows-vs-x64-relwithdebinfo --target OpenLR2RadarRenderCheck
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $check = (Resolve-Path out/windows-vs-x64/RelWithDebInfo/OpenLR2RadarRenderCheck.exe)
+          Push-Location stage
+          & $check dx11
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & $check dx9
+          if ($LASTEXITCODE -eq 77) { Write-Host "Direct3D 9 unavailable on this runner"; $LASTEXITCODE = 0 }
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Pop-Location
+          Remove-Item -LiteralPath 'stage/Log.txt' -ErrorAction SilentlyContinue
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: OpenLR2_v30_RenderChecks
+          path: |
+            native-frames/*.png
+            stage/Log.txt
+            out/windows-vs-x64/RelWithDebInfo/Log.txt
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:
-          name: OpenLR2_v29_Radar_x64
+          name: OpenLR2_v30_Radar_x64
           path: stage/
           if-no-files-found: error
