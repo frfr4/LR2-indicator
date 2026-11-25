@@ -1,8 +1,8 @@
-name: OpenLR2 v30.1 original radar scale
+name: OpenLR2 v30.2 footer typography
 on:
   push:
-    branches: [radar-v30-1-test]
-    paths: ['.github/workflows/OpenLR2-native.yml', 'OpenLR2_SelectRadar_Addon.zip', 'MinaCalc527_Addon.zip', 'RadarV28_Addon.zip', 'RadarV29_Addon.zip', 'RadarV30_Addon.zip']
+    branches: [radar-v30-2-test]
+    paths: ['.github/workflows/OpenLR2-native.yml', 'OpenLR2_SelectRadar_Addon.zip', 'MinaCalc527_Addon.zip', 'RadarV28_Addon.zip', 'RadarV29_Addon.zip', 'RadarV30_Addon.zip', 'RadarV302_Addon.zip']
   workflow_dispatch:
     inputs:
       revision:
@@ -92,6 +92,7 @@ jobs:
             RadarV28_Addon.zip
             RadarV29_Addon.zip
             RadarV30_Addon.zip
+            RadarV302_Addon.zip
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: Apply select radar
@@ -121,6 +122,11 @@ jobs:
           git apply --check --ignore-space-change outline-source/RadarV30.patch
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           git apply --ignore-space-change outline-source/RadarV30.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Expand-Archive radar-payload/RadarV302_Addon.zip footer-source
+          git apply --check --ignore-space-change footer-source/RadarV302.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git apply --ignore-space-change footer-source/RadarV302.patch
       - name: Configure
         run: cmake --preset windows-vs-x64
         env:
@@ -142,16 +148,17 @@ jobs:
           Copy-Item mina-source/LR2files stage/ -Recurse -Force
           Copy-Item range-source/LR2files stage/ -Recurse -Force
           Copy-Item text-source/LR2files stage/ -Recurse -Force
+          Copy-Item footer-source/LR2files stage/ -Recurse -Force
           Copy-Item mina-source/licenses stage/ -Recurse -Force
           Copy-Item out/windows-vs-x64/RelWithDebInfo/OpenLR2_x64.exe "stage/OpenLR2_indicator Patched.exe"
           Copy-Item dep/FMOD/bin64/fmod.dll stage/
           $select = 'LR2files/Theme/KCOOL_WMIX_FHD/WMIX/select'
-          foreach ($file in @('OpenLR2_indicator Patched.exe', 'fmod.dll', "$select/select_radar.lr2skin", "$select/radar/song.png", "$select/radar/player.png", "$select/radar/shadows.png", "$select/radar/rating-text-v29.png")) {
+          foreach ($file in @('OpenLR2_indicator Patched.exe', 'fmod.dll', "$select/select_radar.lr2skin", "$select/radar/song.png", "$select/radar/player.png", "$select/radar/shadows.png", "$select/radar/rating-text-v29.png", "$select/radar/traits-80.png")) {
             if (!(Test-Path -LiteralPath (Join-Path stage $file) -PathType Leaf)) { throw "Missing package file $file" }
           }
       - uses: actions/upload-artifact@v4
         with:
-          name: OpenLR2_v30_1_Radar_x64
+          name: OpenLR2_v30_2_Radar_x64
           path: stage/
           if-no-files-found: error
       - name: Check native select radar pixels
@@ -173,12 +180,15 @@ jobs:
           }
           Pop-Location
           if ($completed.Count -eq 0) { throw "No native framebuffer available" }
+          foreach ($backend in $completed) {
+            & ./footer-source/check-footer.ps1 -Backend $backend -Frames $frames.FullName
+          }
           Write-Host "Completed native pixel checks with $completed"
           if (Test-Path stage/Log.txt) { Move-Item stage/Log.txt native-frames/Log.txt -Force }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: OpenLR2_v30_1_RenderChecks
+          name: OpenLR2_v30_2_RenderChecks
           path: |
             native-frames/*.png
             native-frames/Log.txt
