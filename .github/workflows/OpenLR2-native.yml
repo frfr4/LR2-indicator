@@ -1,8 +1,8 @@
-name: OpenLR2 v27 MinaCalc 527
+name: OpenLR2 v28 radar
 on:
   push:
-    branches: [radar-v27-minacalc]
-    paths: ['.github/workflows/OpenLR2-native.yml', 'OpenLR2_SelectRadar_Addon.zip', 'MinaCalc527_Addon.zip']
+    branches: [radar-v28-test]
+    paths: ['.github/workflows/OpenLR2-native.yml', 'OpenLR2_SelectRadar_Addon.zip', 'MinaCalc527_Addon.zip', 'RadarV28_Addon.zip']
   workflow_dispatch:
     inputs:
       revision:
@@ -89,6 +89,7 @@ jobs:
           sparse-checkout: |
             OpenLR2_SelectRadar_Addon.zip
             MinaCalc527_Addon.zip
+            RadarV28_Addon.zip
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: Apply select radar
@@ -103,6 +104,11 @@ jobs:
           git apply --check --ignore-space-change mina-source/MinaCalc527.patch
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           git apply --ignore-space-change mina-source/MinaCalc527.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Expand-Archive radar-payload/RadarV28_Addon.zip range-source
+          git apply --check --ignore-space-change range-source/RadarV28.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git apply --ignore-space-change range-source/RadarV28.patch
       - name: Configure
         run: cmake --preset windows-vs-x64
         env:
@@ -122,6 +128,7 @@ jobs:
           Expand-Archive skin.zip stage
           Copy-Item radar-source/LR2files stage/ -Recurse -Force
           Copy-Item mina-source/LR2files stage/ -Recurse -Force
+          Copy-Item range-source/LR2files stage/ -Recurse -Force
           Copy-Item mina-source/licenses stage/ -Recurse -Force
           Copy-Item out/windows-vs-x64/RelWithDebInfo/OpenLR2_x64.exe "stage/OpenLR2_indicator Patched.exe"
           Copy-Item dep/FMOD/bin64/fmod.dll stage/
@@ -131,6 +138,6 @@ jobs:
           }
       - uses: actions/upload-artifact@v4
         with:
-          name: OpenLR2_v27_MinaCalc527_x64
+          name: OpenLR2_v28_Radar_x64
           path: stage/
           if-no-files-found: error
