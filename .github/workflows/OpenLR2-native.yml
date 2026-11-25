@@ -1,7 +1,7 @@
 name: OpenLR2 native indicator
 on:
   push:
-    branches: [main]
+    branches: [main, radar-v26-test]
     paths: ['.github/workflows/OpenLR2-native.yml', 'OpenLR2_SelectRadar_Addon.zip']
   workflow_dispatch:
     inputs:
