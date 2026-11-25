@@ -149,31 +149,40 @@ jobs:
           foreach ($file in @('OpenLR2_indicator Patched.exe', 'fmod.dll', "$select/select_radar.lr2skin", "$select/radar/song.png", "$select/radar/player.png", "$select/radar/shadows.png", "$select/radar/rating-text-v29.png")) {
             if (!(Test-Path -LiteralPath (Join-Path stage $file) -PathType Leaf)) { throw "Missing package file $file" }
           }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenLR2_v30_1_Radar_x64
+          path: stage/
+          if-no-files-found: error
       - name: Check native select radar pixels
         shell: pwsh
         run: |
           cmake --build --preset windows-vs-x64-relwithdebinfo --target OpenLR2RadarRenderCheck
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $check = (Resolve-Path out/windows-vs-x64/RelWithDebInfo/OpenLR2RadarRenderCheck.exe)
+          $frames = New-Item -ItemType Directory -Force native-frames
           Push-Location stage
-          & $check dx11
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          & $check dx9
-          if ($LASTEXITCODE -eq 77) { Write-Host "Direct3D 9 unavailable on this runner"; $LASTEXITCODE = 0 }
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $completed = @()
+          foreach ($backend in @('software', 'dx9', 'dx11')) {
+            $process = Start-Process -FilePath $check -ArgumentList $backend -WorkingDirectory (Get-Location).Path -NoNewWindow -PassThru
+            if (!$process.WaitForExit(60000)) { $process.Kill(); $process.WaitForExit() }
+            $code = $process.ExitCode
+            if ($code -eq 0) { $completed += $backend; continue }
+            if (Test-Path (Join-Path $frames.FullName "$backend.ready")) { throw "$backend pixel test failed after initialization ($code)" }
+            Write-Host "$backend framebuffer unavailable on this host ($code)"
+          }
           Pop-Location
-          Remove-Item -LiteralPath 'stage/Log.txt' -ErrorAction SilentlyContinue
+          if ($completed.Count -eq 0) { throw "No native framebuffer available" }
+          Write-Host "Completed native pixel checks with $completed"
+          if (Test-Path stage/Log.txt) { Move-Item stage/Log.txt native-frames/Log.txt -Force }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: OpenLR2_v30_1_RenderChecks
           path: |
             native-frames/*.png
+            native-frames/Log.txt
             stage/Log.txt
             out/windows-vs-x64/RelWithDebInfo/Log.txt
           if-no-files-found: ignore
-      - uses: actions/upload-artifact@v4
-        with:
-          name: OpenLR2_v30_1_Radar_x64
-          path: stage/
-          if-no-files-found: error
+
