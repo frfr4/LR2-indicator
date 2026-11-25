@@ -1,8 +1,8 @@
-name: OpenLR2 v28 radar
+name: OpenLR2 v29 radar text
 on:
   push:
-    branches: [radar-v28-test]
-    paths: ['.github/workflows/OpenLR2-native.yml', 'OpenLR2_SelectRadar_Addon.zip', 'MinaCalc527_Addon.zip', 'RadarV28_Addon.zip']
+    branches: [radar-v29-test]
+    paths: ['.github/workflows/OpenLR2-native.yml', 'OpenLR2_SelectRadar_Addon.zip', 'MinaCalc527_Addon.zip', 'RadarV28_Addon.zip', 'RadarV29_Addon.zip']
   workflow_dispatch:
     inputs:
       revision:
@@ -90,6 +90,7 @@ jobs:
             OpenLR2_SelectRadar_Addon.zip
             MinaCalc527_Addon.zip
             RadarV28_Addon.zip
+            RadarV29_Addon.zip
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: Apply select radar
@@ -109,6 +110,11 @@ jobs:
           git apply --check --ignore-space-change range-source/RadarV28.patch
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           git apply --ignore-space-change range-source/RadarV28.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Expand-Archive radar-payload/RadarV29_Addon.zip text-source
+          git apply --check --ignore-space-change text-source/RadarV29.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git apply --ignore-space-change text-source/RadarV29.patch
       - name: Configure
         run: cmake --preset windows-vs-x64
         env:
@@ -129,15 +135,16 @@ jobs:
           Copy-Item radar-source/LR2files stage/ -Recurse -Force
           Copy-Item mina-source/LR2files stage/ -Recurse -Force
           Copy-Item range-source/LR2files stage/ -Recurse -Force
+          Copy-Item text-source/LR2files stage/ -Recurse -Force
           Copy-Item mina-source/licenses stage/ -Recurse -Force
           Copy-Item out/windows-vs-x64/RelWithDebInfo/OpenLR2_x64.exe "stage/OpenLR2_indicator Patched.exe"
           Copy-Item dep/FMOD/bin64/fmod.dll stage/
           $select = 'LR2files/Theme/KCOOL_WMIX_FHD/WMIX/select'
-          foreach ($file in @('OpenLR2_indicator Patched.exe', 'fmod.dll', "$select/select_radar.lr2skin", "$select/radar/song.png", "$select/radar/player.png", "$select/radar/shadows.png")) {
+          foreach ($file in @('OpenLR2_indicator Patched.exe', 'fmod.dll', "$select/select_radar.lr2skin", "$select/radar/song.png", "$select/radar/player.png", "$select/radar/shadows.png", "$select/radar/rating-text-v29.png")) {
             if (!(Test-Path -LiteralPath (Join-Path stage $file) -PathType Leaf)) { throw "Missing package file $file" }
           }
       - uses: actions/upload-artifact@v4
         with:
-          name: OpenLR2_v28_Radar_x64
+          name: OpenLR2_v29_Radar_x64
           path: stage/
           if-no-files-found: error
