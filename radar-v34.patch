@@ -1,0 +1,408 @@
+diff --git a/LR2/chart_radar/catalog.hpp b/LR2/chart_radar/catalog.hpp
+--- a/LR2/chart_radar/catalog.hpp
++++ b/LR2/chart_radar/catalog.hpp
+@@ -3,6 +3,7 @@
+ #include "physical_id.hpp"
+ #include "ratio_soflan.hpp"
+ #include "upper_range.hpp"
++#include "phrase_radar.hpp"
+ #include <atomic>
+ #include <mutex>
+ #include <optional>
+@@ -23,7 +24,7 @@
+     struct Entry { Scores scores; ChartTraits traits; };
+     struct Band { double center; int scratch; double hardFactor; };
+     using Entries = std::unordered_map<std::string,Entry>;
+-    Entries entries, baseline;
++    Entries entries, baseline, previous7;
+     using PoorMap = std::unordered_map<std::string,int>;
+     PoorMap poor;
+     std::unordered_map<std::string,Band> levels;
+@@ -39,10 +40,10 @@
+         if (status!=SQLITE_OK) {cache.reset();return;}
+         sqlite3_busy_timeout(ptr,350);
+         sqlite3_exec(ptr,"PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL",nullptr,nullptr,nullptr);
+-        if (sqlite3_exec(ptr,"CREATE TABLE IF NOT EXISTS radar_v33_native (hash TEXT,mode INTEGER,"
++        if (sqlite3_exec(ptr,"CREATE TABLE IF NOT EXISTS radar_v34_phrase (hash TEXT,mode INTEGER,"
+                 "a INTEGER,b INTEGER,c INTEGER,d INTEGER,e INTEGER,f INTEGER,g INTEGER,h INTEGER,"
+                 "end_spike INTEGER,shortfall INTEGER,PRIMARY KEY(hash,mode))",nullptr,nullptr,nullptr)!=SQLITE_OK) {cache.reset();return;}
+-        readCache(ptr,"SELECT * FROM radar_v33_native",entries);
++        readCache(ptr,"SELECT * FROM radar_v34_phrase",entries);
+         if (sqlite3_exec(ptr,"CREATE TABLE IF NOT EXISTS radar_hard_poor_v1 "
+                 "(hash TEXT,mode INTEGER,cents INTEGER,PRIMARY KEY(hash,mode))",nullptr,nullptr,nullptr)==SQLITE_OK) {
+             auto q=query(ptr,"SELECT hash,mode,cents FROM radar_hard_poor_v1");
+@@ -54,7 +55,7 @@
+             }
+         }
+         // Only 7-key scores ever included the external calculator. Recover other key modes.
+-        for (const auto table : {"radar_v28_range","radar_v27_mina527"}) {
++        for (const auto table : {"radar_v33_native","radar_v28_range","radar_v27_mina527"}) {
+             auto exists=query(ptr,"SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1");
+             sqlite3_bind_text(exists.get(),1,table,-1,SQLITE_STATIC);
+             if (sqlite3_step(exists.get())==SQLITE_ROW) {
+@@ -116,7 +117,8 @@
+     explicit ChartCatalog(const std::string& file,const std::string& cachePath={}) {
+         const auto path=std::filesystem::u8path(file);
+         readTable(path,baseline);
+-        readTable(path.parent_path()/"charts-v33.tsv",entries,&poor);
++        readTable(path.parent_path()/"charts-v34.tsv",entries,&poor);
++        readTable(path.parent_path()/"charts-v33.tsv",previous7,&poor);
+         std::ifstream bands(std::filesystem::u8path(file).parent_path()/"bands-v26.tsv");
+         std::string hash;
+         Band band{};
+@@ -178,7 +180,10 @@
+                 const auto match=physicalIndex.find(physicalId(decoded));
+                 if (match!=physicalIndex.end()) canonical=match->second;
+             }
+-            auto reused=canonical!=hash ? finalEntry(canonical,mode) : std::nullopt;
++            auto reused=mode==7 ? lookup(previous7,canonical,mode) : std::nullopt;
++            // Measure the actual file before passing note ownership to the legacy calculator.
++            phrases::Measures phrasesMeasured;
++            if (mode==7) phrasesMeasured=phrases::measure(decoded.notes);
+             Entry result{};
+             // A physical match can share the seven playing axes. MAINBPM votes still
+             // come from this file, including mines that do not enter its input density.
+@@ -203,14 +208,18 @@
+                     if (mode==7) result.scores=upperRange(result.scores,measured.raw);
+                 }
+             }
+-            if (mode==7) result.scores[Soflan]=scroll;
++            if (mode==7) {
++                result.scores[Soflan]=scroll;
++                for (auto& score:result.scores) score=displayCents(score)/100.;
++                result.scores=phrases::adjust(result.scores,phrasesMeasured);
++            }
+             for (auto& score:result.scores) score=displayCents(score)/100.;
+             const auto& value=result.scores;
+             const auto& traits=result.traits;
+             std::lock_guard<std::mutex> lock(mutex);
+             if (entries.emplace(key(hash,mode),Entry{value,traits}).second && cache) {
+                 try {
+-                    auto put=query(cache.get(),"INSERT OR REPLACE INTO radar_v33_native VALUES(?,?,?,?,?,?,?,?,?,?,?,?)");
++                    auto put=query(cache.get(),"INSERT OR REPLACE INTO radar_v34_phrase VALUES(?,?,?,?,?,?,?,?,?,?,?,?)");
+                     sqlite3_bind_text(put.get(),1,hash.c_str(),-1,SQLITE_TRANSIENT);
+                     sqlite3_bind_int(put.get(),2,mode);
+                     for (int i=0;i<Count;++i) sqlite3_bind_int64(put.get(),3+i,displayCents(value[i]));
+diff --git a/LR2/chart_radar/phrase_load.hpp b/LR2/chart_radar/phrase_load.hpp
+new file mode 100644
+--- /dev/null
++++ b/LR2/chart_radar/phrase_load.hpp
+@@ -0,0 +1,152 @@
++// Physical evidence for the seven-key radar. Input is sorted, deduplicated playable heads.
++#pragma once
++#include "radar.hpp"
++#include <numeric>
++#include <limits>
++namespace chart_radar::phrases {
++using Series = std::vector<double>;
++inline double quantile(Series values,double q) {
++    if(values.empty()) return 0.;
++    std::sort(values.begin(),values.end());
++    double p=q*(values.size()-1);
++    auto i=static_cast<std::size_t>(p);
++    return values[i]+(p-i)*(values[std::min(i+1,values.size()-1)]-values[i]);
++}
++struct Windows {
++    const Series& time;
++    Series prefix;
++    explicit Windows(const Series& t,const Series& loads):time(t),prefix(loads.size()+1) {
++        std::partial_sum(loads.begin(),loads.end(),prefix.begin()+1);
++    }
++    double rate(double start,double width,double slack) const {
++        auto lo=std::lower_bound(time.begin(),time.end(),start-slack)-time.begin();
++        auto hi=std::upper_bound(time.begin(),time.end(),start+width+1.e-9)-time.begin();
++        return (prefix[hi]-prefix[lo])/width;
++    }
++    Series uniform(double fraction,bool absolute=false) const {
++        const double duration=time.back()-time.front(),width=duration*fraction;
++        const double first=time.front(),last=absolute?(first+duration-width):(time.back()-width);
++        Series result(401);
++        for(int i=0;i<=400;++i) {
++            double start=i==400?last:first+i*((last-first)/400.);
++            result[i]=rate(start,width,absolute?0.:1.e-9);
++        }
++        return result;
++    }
++    double centeredPeak(double fraction) const {
++        double duration=time.back()-time.front(),width=duration*fraction,peak=0.;
++        for(double t:time) peak=std::max(peak,rate(std::clamp(t-width*.5,time.front(),time.back()-width),width,1.e-9));
++        return peak;
++    }
++    double combinedPeak(double f,double g) const {return std::sqrt(centeredPeak(f)*centeredPeak(g));}
++};
++inline double highest(const Series& x) {return *std::max_element(x.begin(),x.end());}
++inline int bits(unsigned v) {return static_cast<int>(std::bitset<8>(v).count());}
++struct Measures {
++    // density, peak and stamina of the published HARD calibration.
++    std::array<double,3> density{};
++    // roll burst / sustain, 8-head q95, three-hit q99, five-hit maximum,
++    // three-hit sustain, accompanied repeats, chord changes burst / sustain, chord coverage.
++    std::array<double,10> technique{};
++    double strict=0.,relaxed=0.,edge=0.,paired=0.,broad=0.,covered=0.;
++    bool valid=false;
++};
++inline Measures measure(const std::vector<Note>& notes) {
++    Measures out;
++    if(notes.size()<2) return out;
++    std::vector<long long> us; std::vector<unsigned> masks;
++    for(const auto& note:notes) {
++        auto tick=std::llround(note.start*1000000.);
++        if(us.empty() || tick!=us.back()){us.push_back(tick);masks.push_back(0);}
++        if(note.lane>=0 && note.lane<7) masks.back()|=1u<<note.lane;
++    }
++    if(us.size()<2 || us.front()>=us.back()) return out;
++    const auto n=us.size();
++    Series t(n),absolute(n),pulseTime(n),keys(n),chord(n),move(n),roll(n),accomp(n),threeMax(n),heads,threeHz;
++    std::array<Series,3> energy{Series(n),Series(n),Series(n)};
++    std::array<std::vector<std::size_t>,7> lanes;
++    unsigned last=0,prev=0;std::size_t lastIx=0; double previousGap=0;
++    for(std::size_t i=0;i<n;++i) {
++        absolute[i]=us[i]/1000000.;t[i]=(us[i]-us.front())/1000000.;pulseTime[i]=us[i]*1.e-6;
++        unsigned now=masks[i];keys[i]=bits(now);chord[i]=std::max(0.,keys[i]-1.);
++        if(!now) continue;
++        heads.insert(heads.end(),static_cast<std::size_t>(keys[i]),t[i]);
++        for(int k=0;k<7;++k) if(now&(1u<<k)) lanes[k].push_back(i);
++        if(last) {
++            double gap=t[i]-t[lastIx];int shared=bits(last&now);
++            accomp[i]=shared*std::log1p(bits(now&~last))/gap;
++            int width=std::min(bits(last),bits(now));
++            if(width>=2) move[i]=width-shared;
++            if(prev) {
++                auto up=(prev<<2)&(last<<1)&now, down=(prev>>2)&(last>>1)&now;
++                roll[i]=(bits(up)+bits(down))/std::max(gap,previousGap);
++            }
++            previousGap=gap;
++        }
++        prev=last;last=now;lastIx=i;
++    }
++    if(heads.empty()) return out;
++    for(const auto& hits:lanes) {
++        for(std::size_t end=1;end<hits.size();++end) {
++            double strict=0.;std::array<double,2> extra{};
++            for(std::size_t intervals=1;intervals<=2 && intervals<=end;++intervals) {
++                const auto start=end-intervals;
++                const double lastGap=pulseTime[hits[end]]-pulseTime[hits[end-1]];
++                const double firstGap=pulseTime[hits[start+1]]-pulseTime[hits[start]];
++                const double slow=std::max(lastGap,firstGap),ratio=std::min(firstGap,lastGap)/slow;
++                auto flank=[&](double gap){return std::clamp(std::log2(gap/slow),0.,1.);};
++                double left=start?flank(pulseTime[hits[start]]-pulseTime[hits[start-1]]):1.;
++                double right=end+1<hits.size()?flank(pulseTime[hits[end+1]]-pulseTime[hits[end]]):1.;
++                const double iso=std::min(left,right),edge=std::max(left,right);
++                const double old=std::pow(iso*ratio*intervals/slow,2);
++                strict+=old;
++                for(int k=0;k<2;++k) {
++                    double loose=(iso+(k+1)*.5*(edge-iso))*std::sqrt(ratio)*intervals/slow;
++                    extra[k]=std::max(extra[k],loose*loose-old);
++                }
++            }
++            energy[0][hits[end]]+=strict;
++            for(int k=0;k<2;++k) energy[k+1][hits[end]]+=strict+extra[k];
++            if(end>=2) {
++                double gap=0.;
++                for(std::size_t j=end-1;j<=end;++j) gap=std::max(gap,t[hits[j]]-t[hits[j-1]]);
++                double hz=1./gap;threeHz.push_back(hz);threeMax[hits[end]]=std::max(threeMax[hits[end]],hz);
++            }
++            if(end>=4) {
++                double gap=0.;
++                for(std::size_t j=end-3;j<=end;++j) gap=std::max(gap,t[hits[j]]-t[hits[j-1]]);
++                out.technique[4]=std::max(out.technique[4],1./gap);
++            }
++        }
++    }
++    const double duration=t.back();Windows counts(absolute,keys);
++    auto one=counts.uniform(.01,true),five=counts.uniform(.05,true),fifteen=counts.uniform(.15,true);
++    out.density={std::sqrt(quantile(five,.9)*heads.size()/(absolute.back()-absolute.front())),
++                 std::sqrt(highest(one)*highest(five)),std::sqrt(highest(fifteen)*quantile(fifteen,.9))};
++    Windows rolls(t,roll),moves(t,move);
++    out.technique[0]=rolls.combinedPeak(.0025,.01);out.technique[1]=rolls.combinedPeak(.04,.12);
++    Series speed8;
++    for(std::size_t j=8;j<heads.size();++j) speed8.push_back(8./std::max(1.e-6,heads[j]-heads[j-8]));
++    out.technique[2]=quantile(speed8,.95);out.technique[3]=quantile(threeHz,.99);
++    out.technique[5]=Windows(t,threeMax).combinedPeak(.04,.12);
++    out.technique[6]=Windows(t,accomp).combinedPeak(.04,.12);
++    out.technique[7]=moves.combinedPeak(.0025,.01);out.technique[8]=moves.combinedPeak(.04,.12);
++    out.technique[9]=quantile(Windows(t,chord).uniform(.04),.9);
++    std::array<double*,3> fields{&out.strict,&out.relaxed,&out.edge};
++    for(int i=0;i<3;++i) {
++        Windows loads(pulseTime,energy[i]);
++        *fields[i]=std::sqrt(loads.prefix.back()/(pulseTime.back()-pulseTime.front())*quantile(loads.uniform(.12),.9));
++    }
++    Windows keysTimed(pulseTime,keys);Series moments(401);
++    const double D=pulseTime.back()-pulseTime.front();
++    for(int i=0;i<=400;++i) {
++        const double c=i==400?pulseTime.back():pulseTime.front()+i*(D/400.);
++        auto rate=[&](double f){double w=D*f;return keysTimed.rate(std::clamp(c-w*.5,pulseTime.front(),pulseTime.back()-w),w,1.e-9);};
++        double mid=rate(.02),shortRate=rate(.005);
++        moments[i]=std::sqrt(mid*shortRate);
++        out.broad=std::max(out.broad,std::cbrt(mid*shortRate*rate(.06)));
++    }
++    out.paired=highest(moments);out.covered=std::sqrt(out.paired*quantile(moments,.95));
++    out.valid=true;return out;
++}
++} // namespace chart_radar::phrases
+diff --git a/LR2/chart_radar/phrase_parameters.hpp b/LR2/chart_radar/phrase_parameters.hpp
+new file mode 100644
+--- /dev/null
++++ b/LR2/chart_radar/phrase_parameters.hpp
+@@ -0,0 +1,44 @@
++// Frozen on 727 development charts; chart identity and difficulty are not runtime inputs.
++#pragma once
++namespace chart_radar::phrase_parameters {
++inline constexpr double density0X[] = {0,2.6725585269399161,2.7467853068617525,2.794788192748181,2.82127448212358,2.8552288033157183,2.8760382826653155,2.8977885763118083,2.916308488302831,2.9355162986940906,2.9579185890021837,2.976632200705998,2.9916150229844982,3.0082169656334776,3.027430652424858,3.0454321630937473,3.066900517498099,3.084121217669435,3.1128717111956772,3.1347354563202505,3.1530285309018753,3.186588576563127,3.2104595887609091,3.2511013547204866,3.3171748478554846,3.3884569973847527};
++inline constexpr double density0Y[] = {0,4.8282147633114816,4.9699066397532556,5.0596584873803438,5.1651066400559165,5.2626350292435324,5.3619511292684932,5.448258944251136,5.5752694106610123,5.6538974930603096,5.7290538020156685,5.8086824018324874,5.8711913444758652,5.9384769166777529,6.0429399636915981,6.1210602609275302,6.2005352452949447,6.2624376431736666,6.3350897886103663,6.3853205048453479,6.4432180492939528,6.5366799866909195,6.6215045160577803,6.7153330690838855,6.8294250507022944,7.0628251024989055};
++inline constexpr double density1X[] = {0,3.056375111706056,3.1178919039541575,3.1509966920117618,3.1822174709711772,3.2098968260138174,3.2268295127451916,3.2452886950621362,3.2670008103645527,3.285003060148568,3.3029306071434559,3.3246866676198592,3.3496846427311504,3.3659976462055416,3.3885077192579534,3.409529306257002,3.4258477033170838,3.4485985436465652,3.4747273490502337,3.5005853116055001,3.5187308047240973,3.5570810149961356,3.5844745459627605,3.6136686285479387,3.6426400495746907,3.7283076688120369};
++inline constexpr double density1Y[] = {0,4.8282147633114816,4.9699066397532556,5.0596584873803438,5.1651066400559165,5.2626350292435324,5.3619511292684932,5.448258944251136,5.5752694106610123,5.6538974930603096,5.7290538020156685,5.8086824018324874,5.8711913444758652,5.9384769166777529,6.0429399636915981,6.1210602609275302,6.2005352452949447,6.2624376431736666,6.3350897886103663,6.3853205048453479,6.4432180492939528,6.5366799866909195,6.6215045160577803,6.7153330690838855,6.8294250507022944,7.0628251024989055};
++inline constexpr double density2X[] = {0,2.7899718713943567,2.8729224067437986,2.918229789092615,2.9586374705393461,2.9908305697790754,3.0100202534176517,3.0300505255925159,3.0513325954174002,3.0717810572859112,3.0913384376998723,3.1058538538441876,3.1250086904163936,3.14294358264338,3.1633568072614007,3.1801426190365647,3.2041320604906383,3.2232794050854361,3.2396578321555038,3.2609730730423507,3.292201565319901,3.3233553347044853,3.3583070606512742,3.3925340652339351,3.4514199994699686,3.5139178773943756};
++inline constexpr double density2Y[] = {0,4.8282147633114816,4.9699066397532556,5.0596584873803438,5.1651066400559165,5.2626350292435324,5.3619511292684932,5.448258944251136,5.5752694106610123,5.6538974930603096,5.7290538020156685,5.8086824018324874,5.8711913444758652,5.9384769166777529,6.0429399636915981,6.1210602609275302,6.2005352452949447,6.2624376431736666,6.3350897886103663,6.3853205048453479,6.4432180492939528,6.5366799866909195,6.6215045160577803,6.7153330690838855,6.8294250507022944,7.0628251024989055};
++inline constexpr double densityWeights[] = {0.0044671808739018453,0.090538268522111151,0.12534688437466726};
++inline constexpr double scales[] = {-0.0064339203562829945,0.025825791831625325,0.071567082756183148,-0.03731488825525154,0.14197747316519363,-0.091002325696446729};
++inline constexpr double densityBound = 0.30010459245033816;
++inline constexpr double jackX[] = {0,4.0626688728778007,4.2389965236824727,4.3440236302238091,4.4324075477526526,4.5140862850915013,4.5802113614840998,4.6383313863152242,4.6981168365227104,4.759505779803523,4.8222512356891514,4.9003095474878045,4.9665125006845878,5.0099931512449363,5.0469885029270944,5.0980338192656145,5.1411434719499267,5.1930039751124584,5.2401609117707473,5.2885811412932773,5.3777395016468637,5.4639153350263356,5.5360957232537862,5.6200817522536521,5.8095889062692017,6.11429417280275};
++inline constexpr double jackY[] = {0,2.5666446617481689,3.4788757281808143,3.8289259348157203,4.0294858987779714,4.2352554334602104,4.4165791036162974,4.5835488427898641,4.6642689376644544,4.756145542111188,4.8093152012328302,4.9008204280890491,4.9852955076362786,5.056818889511848,5.1543268626993548,5.2101216476751437,5.2854486602211086,5.3513649360252904,5.3994017445762026,5.4590626948204743,5.5187475066397997,5.5934742312272103,5.6762659774667936,5.7749761826350055,5.9020109516764308,6.1921701158777953};
++inline constexpr double peakX[] = {0,3.046131125817134,3.1035406869503026,3.1410809115733218,3.1650992679658607,3.1895724746603888,3.2129424942182494,3.2347099047323273,3.2577316153742011,3.2750744376168268,3.2949453237080331,3.3145845498194149,3.3289646450578712,3.3490597098214718,3.3785096189495705,3.3953358898483108,3.4121870477928713,3.4283105477178726,3.4496144171194687,3.4725267808875353,3.5109414824924237,3.5368881359124211,3.555961040450478,3.582996477937674,3.6248295549563228,3.6934651844687449};
++inline constexpr double peakY[] = {0,2.6943293261550743,3.0690538621937198,3.3032904351348447,3.4599230657184812,3.6147085008746598,3.7581722806098856,3.8947764236306801,4.0223442077060714,4.1071803816643158,4.2260684845220524,4.3267253028266808,4.4496712619989864,4.5097600011834329,4.6110636297126231,4.7111034517487003,4.8160360790270254,4.9043409262021695,5.0303269479820356,5.1498697295705993,5.2762720949118647,5.4236238252336735,5.5643561819406244,5.7781561727278614,6.0049865292653166,6.3377308604302094};
++inline constexpr double jackMix = 0.28452902478379294;
++inline constexpr double relaxedShare = 0.59999999999999998;
++inline constexpr double peakCut = 0.20000000000000001;
++inline constexpr double shapeKnots[6][4] = {
++    {3.6869969427388756,5.0529707753426152,5.7126606113290403,6.2299652905752847},
++    {3.512141874473524,4.4055350548116552,5.0642330117829388,5.7896322830700395},
++    {3.0601606108232891,4.5240902294750107,5.3419609699671673,5.9023995038737},
++    {4.0385142236499991,4.9804094962507568,5.3895279801559592,5.7643721087669642},
++    {2.9181468101578525,4.0397770246398226,4.8203944369749854,5.6816406128567936},
++    {3.8634830921909518,4.6157729622496513,5.1536338544507929,5.7286956317347562}
++};
++inline constexpr double shapeWeights[6][4] = {
++    {0.037683804778095902,0.017850883707058587,-0.041902828313610523,0.004758515352448478},
++    {0.006467690105130249,0.0061683921877505859,-0.081831949775419563,0.046232489413643107},
++    {-0.059263001408929344,-0.030726759466252682,0.087675293925117456,0.093794970156295426},
++    {0.010991479267688708,0.0310125101675898,-0.0082782045912858267,-0.076077801288876312},
++    {0.068867357544095703,0.070471548133100734,-0.020159534901602397,-0.10385166999311216},
++    {-0.12936205109865806,-0.10187624869992168,-0.07686612108495855,-0.041427674579792753}
++};
++struct Term { int axis,feature; double expected[3],deviation,weight; };
++inline constexpr Term terms[] = {
++    {2,2,{0.68081965137689215,0.026402917986078689,0.89639494836928491},0.15810850720404904,0.05636840242085088},
++    {3,3,{1.6694176268455465,0.095137818738932609,-0.054766622047873512},0.17111378543451763,0.034830517866320493},
++    {3,6,{-1.2699712086778772,0.20234491909591859,1.0112088477686059},0.78818464664599175,0.13593045970599546},
++    {4,7,{1.0583035235576839,0.018536388590913552,0.70687090147460818},0.20222337657229097,0.031302352006792843},
++    {4,8,{-0.85287834237689197,0.031935793619892558,1.1377465986851756},0.31113663664775515,0.020946230925829142}
++};
++}
+diff --git a/LR2/chart_radar/phrase_radar.hpp b/LR2/chart_radar/phrase_radar.hpp
+new file mode 100644
+--- /dev/null
++++ b/LR2/chart_radar/phrase_radar.hpp
+@@ -0,0 +1,67 @@
++#pragma once
++#include "phrase_load.hpp"
++#include "phrase_parameters.hpp"
++namespace chart_radar::phrases {
++template<std::size_t N>
++inline double interpolate(double x,const double (&xp)[N],const double (&yp)[N],bool clampEnds=false) {
++    if(clampEnds) x=std::clamp(x,xp[0],xp[N-1]);
++    auto upper=std::upper_bound(xp,xp+N,x)-xp;
++    std::size_t i=static_cast<std::size_t>(std::clamp<std::ptrdiff_t>(upper,1,N-1)-1);
++    return yp[i]+(yp[i+1]-yp[i])*(x-xp[i])/(xp[i+1]-xp[i]);
++}
++inline double cents(double x) {return std::nearbyint(x*100.)/100.;}
++inline Scores adjust(Scores scores,const Measures& f) {
++    if(!f.valid) return scores;
++    namespace par=phrase_parameters;
++    constexpr Axis axis[]={Density,Peak,Stair,Jack,Chord,Stamina};
++    std::array<double,6> v{},logV{},shape{};
++    for(int i=0;i<6;++i) v[i]=scores[axis[i]];
++    auto ordered=v;std::sort(ordered.begin(),ordered.end(),std::greater<double>());
++    double sum=0.;
++    for(int i=0;i<4;++i) sum+=ordered[i]*ordered[i];
++    auto demand=[&](int j,const auto& x,const auto& y) {
++        if(f.density[j]<=0.) return 0.;
++        double scaled=std::max(0.,interpolate(std::log1p(f.density[j]),x,y));
++        return par::densityWeights[j]*(scaled-std::log1p(std::sqrt(sum)));
++    };
++    double pressure=demand(0,par::density0X,par::density0Y)+demand(1,par::density1X,par::density1Y)+demand(2,par::density2X,par::density2Y);
++    pressure=par::densityBound*std::tanh(pressure/par::densityBound);
++    for(int i=0;i<6;++i) {
++        v[i]=cents(v[i]*std::exp(pressure+par::scales[i]));
++        logV[i]=std::log1p(v[i]);shape[i]=par::shapeWeights[i][0];
++        for(int j=0;j<3;++j) {
++            auto knots=par::shapeKnots[i];
++            double t=(logV[i]-knots[j])/std::max(.05,knots[j+1]-knots[j]);
++            shape[i]+=par::shapeWeights[i][j+1]*std::clamp(t,0.,1.);
++        }
++    }
++    for(const auto& p:par::terms) {
++        const auto b=p.expected;
++        double normal=b[0]+b[1]*logV[p.axis]+b[2]*std::log1p(f.density[0]);
++        shape[p.axis]+=p.weight*std::clamp((std::log1p(f.technique[p.feature])-normal)/p.deviation,-3.,3.);
++    }
++    const double limit=std::log(1.5);
++    for(int i=0;i<6;++i) {
++        double shaped=cents(v[i]*std::exp(limit*std::tanh(shape[i]/limit)));
++        scores[axis[i]]=cents(std::sqrt(v[i]*shaped));
++    }
++    auto jackEvidence=[](double input) {
++        return std::expm1(interpolate(std::log1p(input),par::jackX,par::jackY,true));
++    };
++    double mapped=jackEvidence(f.strict),delta=mapped-scores[Jack];
++    scores[Jack]=cents(std::max(0.,scores[Jack]+par::jackMix*delta+
++        std::min(.25*par::jackMix,1.-par::jackMix)*std::max(0.,delta)));
++    // Both decisions use the unmodified baseline so neither correction feeds back on the other.
++    double maximum=*std::max_element(scores.begin(),scores.end()),other=0.;
++    for(int j=0;j<Count;++j) if(j!=Peak) other=std::max(other,scores[j]);
++    double proportion=scores[Jack]/std::max(maximum,1.e-10);
++    scores[Jack]=cents(scores[Jack]+par::relaxedShare*par::jackMix*
++        std::max(0.,jackEvidence(f.relaxed)-mapped)*proportion*proportion);
++    double physical=std::max(0.,interpolate(std::log1p(f.broad),par::peakX,par::peakY));
++    double deficit=std::max(0.,std::log1p(scores[Peak])-physical);
++    double infrequent=std::max(0.,std::log(std::max(1.e-8,f.paired)/std::max(1.e-8,f.covered)));
++    double lead=std::max(0.,1.-other/std::max(1.e-10,scores[Peak]));
++    scores[Peak]=cents(scores[Peak]*std::exp(-par::peakCut*std::tanh(lead*(deficit+2.*infrequent))));
++    return scores;
++}
++}
+diff --git a/LR2/chart_radar/tests/native_smoke.cpp b/LR2/chart_radar/tests/native_smoke.cpp
+--- a/LR2/chart_radar/tests/native_smoke.cpp
++++ b/LR2/chart_radar/tests/native_smoke.cpp
+@@ -1,10 +1,29 @@
+ #include "../display.hpp"
+ #include "../ratio_soflan.hpp"
+ #include "../upper_range.hpp"
++#include "../phrase_radar.hpp"
+ #include <iostream>
+ 
+ int main() {
+     using namespace chart_radar;
++    {
++        std::vector<Note> mixed;
++        for (int i=0;i<160;++i) {
++            double t=i*.33;
++            mixed.push_back({t,t,0,0});
++            mixed.push_back({t,t,2,0});
++            mixed.push_back({t+.10,t+.10,0,0});
++            if (i%3==0) mixed.push_back({t+.19,t+.19,0,0});
++        }
++        auto physical=phrases::measure(mixed);
++        Scores original{};
++        original.fill(150.);original[Peak]=510.;original[Soflan]=22.;original[Scratch]=81.;
++        auto revised=phrases::adjust(original,physical);
++        if (!physical.valid || physical.relaxed<physical.strict || revised[Scratch]!=81. ||
++            revised[Soflan]!=22. || !(revised[Peak]<original[Peak]) || revised[Jack]<=0.) return 80;
++        if (phrases::adjust(original,phrases::measure({}))!=original) return 81;
++        for (double x:revised) if (!std::isfinite(x) || x<0.) return 82;
++    }
+     if (extraPoorCents(1669,180)!=667 || extraPoorCents(1689,233)!=111 ||
+         extraPoorCents(2549,300)!=0 || extraPoorCents(1500,0)!=0 ||
+         extraPoorCents(500,500)!=1000 || extraPoorCents(19,0)!=9000) return 32;
+diff --git a/LR2/chart_radar/tests/select_render.cpp b/LR2/chart_radar/tests/select_render.cpp
+--- a/LR2/chart_radar/tests/select_render.cpp
++++ b/LR2/chart_radar/tests/select_render.cpp
+@@ -93,7 +93,7 @@
+             PoorCase{"bc058266641750aad0114546563b6004","74",667},
+             PoorCase{"7f66d4460d89ebe5e9281554d41a42d3","cherry",111},
+             PoorCase{"b22f2d866ff6e8f62b7b95e9b7fa3a9e","going",0}}) {
+-        std::ifstream table(std::string(assetDir)+"charts-v33.tsv");
++        std::ifstream table(std::string(assetDir)+"charts-v34.tsv");
+         std::string row, hash;
+         Scores scores{};
+         ChartTraits traits;
