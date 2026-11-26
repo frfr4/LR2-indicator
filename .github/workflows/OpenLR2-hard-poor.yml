@@ -1,8 +1,8 @@
-name: OpenLR2 v33.1 HARD POOR
+name: OpenLR2 v33.2 HARD POOR
 on:
   push:
     branches: [radar-v33-hard-poor-test]
-    paths: ['.github/workflows/OpenLR2-hard-poor.yml', 'hard-poor.patch', 'hard-poor.png', 'charts-v33-hard-poor.tsv']
+    paths: ['.github/workflows/OpenLR2-hard-poor.yml', 'hard-poor.patch', 'GaugeInk.zip', 'charts-v33-hard-poor.tsv']
   workflow_dispatch:
     inputs:
       revision:
@@ -39,7 +39,7 @@ jobs:
             RadarV32.patch
             Native33.patch
             hard-poor.patch
-            hard-poor.png
+            GaugeInk.zip
             charts-v33-hard-poor.tsv
             .github/workflows/OpenLR2-native.yml
           sparse-checkout-cone-mode: false
@@ -104,6 +104,11 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           git apply --ignore-space-change radar-payload/hard-poor.patch
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Expand-Archive radar-payload/GaugeInk.zip gauge-ink
+          git apply --check --ignore-space-change gauge-ink/GaugeInk.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git apply --ignore-space-change gauge-ink/GaugeInk.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Configure
         run: cmake --preset windows-vs-x64
         env:
@@ -127,7 +132,8 @@ jobs:
           Copy-Item text-source/LR2files stage/ -Recurse -Force
           Copy-Item footer-source/LR2files stage/ -Recurse -Force
           Copy-Item radar-payload/charts-v33-hard-poor.tsv stage/LR2files/Theme/KCOOL_WMIX_FHD/WMIX/select/radar/charts-v33.tsv
-          Copy-Item radar-payload/hard-poor.png stage/LR2files/Theme/KCOOL_WMIX_FHD/WMIX/select/radar/
+          Copy-Item gauge-ink/hard-poor-ink.png stage/LR2files/Theme/KCOOL_WMIX_FHD/WMIX/select/radar/
+          Copy-Item gauge-ink/traits-80.png stage/LR2files/Theme/KCOOL_WMIX_FHD/WMIX/select/radar/ -Force
           Copy-Item mina-source/licenses stage/ -Recurse -Force
           Copy-Item out/windows-vs-x64/RelWithDebInfo/OpenLR2_x64.exe "stage/OpenLR2_indicator Patched.exe"
           Copy-Item dep/FMOD/bin64/fmod.dll stage/
@@ -137,7 +143,7 @@ jobs:
           }
       - uses: actions/upload-artifact@v4
         with:
-          name: OpenLR2_v33_1_HardPoor_x64
+          name: OpenLR2_v33_2_HardPoor_x64
           path: stage/
           if-no-files-found: error
       - name: Check native select radar pixels
@@ -160,14 +166,14 @@ jobs:
           Pop-Location
           if ($completed.Count -eq 0) { throw "No native framebuffer available" }
           foreach ($backend in $completed) {
-            & ./footer-source/check-footer.ps1 -Backend $backend -Frames $frames.FullName
+            & ./gauge-ink/check-footer.ps1 -Backend $backend -Frames $frames.FullName
           }
           Write-Host "Completed native pixel checks with $completed"
           if (Test-Path stage/Log.txt) { Move-Item stage/Log.txt native-frames/Log.txt -Force }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: OpenLR2_v33_1_HardPoor_RenderChecks
+          name: OpenLR2_v33_2_HardPoor_RenderChecks
           path: |
             native-frames/*.png
             native-frames/Log.txt
