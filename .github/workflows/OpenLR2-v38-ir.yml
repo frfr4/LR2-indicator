@@ -1,0 +1,32 @@
+name: OpenLR2 v38 public lamp measurements
+on:
+  push:
+    branches: [radar-v38-grade-calibration]
+    paths: ['v38-ir/**','.github/workflows/OpenLR2-v38-ir.yml']
+permissions:
+  contents: read
+jobs:
+  observations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: v38-ir
+          persist-credentials: false
+      - name: Read the archived LR2IR public database
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fL --retry 2 --max-time 2100 https://cdn.lr2ir.com/lr2ir-archive-v3.db.gz -o archive.gz
+          echo 'b8b94d9c67cf94411a71501c3533bd15877bd727fd687c060749fae29267b5cf  archive.gz' | sha256sum -c -
+          gzip -dc archive.gz > lr2ir.db
+      - name: Reduce public observations
+        run: |
+          python -m pip install -q numpy
+          python v38-ir/collect.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v38-aggregate-inputs
+          path: ir-data/
+          retention-days: 1
