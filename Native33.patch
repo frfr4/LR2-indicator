@@ -1,0 +1,413 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 83c32b8..560e391 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -249,8 +249,6 @@ target_include_directories(md5 PUBLIC dep/md5)
+ # Separate target so that SkinEditor can use it
+ add_library(
+     OpenLR2Lib
+-    LR2/chart_radar/mina.cpp
+-    dep/Etterna/MinaCalc/MinaCalc.cpp
+     LR2/En_audio.cpp
+     LR2/En_dbio.cpp
+     LR2/En_fileutil.cpp
+@@ -290,7 +288,6 @@ add_library(
+     LR2/Scene13_Courseresult.cpp
+     LR2/strclass.cpp
+ )
+-set_source_files_properties(dep/Etterna/MinaCalc/MinaCalc.cpp PROPERTIES COMPILE_DEFINITIONS STANDALONE_CALC)
+ set_target_properties(OpenLR2Lib PROPERTIES CXX_STANDARD 23)
+ target_include_directories(OpenLR2Lib PUBLIC dep)
+ target_link_libraries(
+@@ -336,7 +333,7 @@ set_target_properties(OpenLR2 PROPERTIES CXX_STANDARD 23)
+ target_link_libraries(OpenLR2 PUBLIC OpenLR2Lib)
+ set_target_properties(OpenLR2 PROPERTIES OUTPUT_NAME "OpenLR2${ARCH_SUFFIX}")
+ 
+-add_executable(OpenLR2RadarCheck EXCLUDE_FROM_ALL LR2/chart_radar/tests/mina_smoke.cpp)
++add_executable(OpenLR2RadarCheck EXCLUDE_FROM_ALL LR2/chart_radar/tests/native_smoke.cpp)
+ set_target_properties(OpenLR2RadarCheck PROPERTIES CXX_STANDARD 23)
+ target_link_libraries(OpenLR2RadarCheck PRIVATE OpenLR2Lib)
+ 
+diff --git a/LR2/chart_radar/catalog.hpp b/LR2/chart_radar/catalog.hpp
+index 983ecc7..8479029 100644
+--- a/LR2/chart_radar/catalog.hpp
++++ b/LR2/chart_radar/catalog.hpp
+@@ -1,9 +1,8 @@
+ #pragma once
+ #include "player_db.hpp"
+ #include "physical_id.hpp"
+-#include "mina_scale.hpp"
+-#include "upper_range.hpp"
+ #include "ratio_soflan.hpp"
++#include "upper_range.hpp"
+ #include <atomic>
+ #include <mutex>
+ #include <optional>
+@@ -19,13 +18,12 @@ inline Database readOnly(const std::string& path) {
+     sqlite3_busy_timeout(db.get(),1200);
+     return db;
+ }
+-class PriorChartCatalog {
+-protected:
++class ChartCatalog {
+     mutable std::mutex mutex;
+     struct Entry { Scores scores; ChartTraits traits; };
+     struct Band { double center; int scratch; double hardFactor; };
+     using Entries = std::unordered_map<std::string,Entry>;
+-    Entries entries, previous, baseline;
++    Entries entries, baseline;
+     std::unordered_map<std::string,Band> levels;
+     std::unordered_map<std::string,std::string> physicalIndex;
+     Database cache{nullptr,sqlite3_close};
+@@ -39,13 +37,19 @@ protected:
+         if (status!=SQLITE_OK) {cache.reset();return;}
+         sqlite3_busy_timeout(ptr,350);
+         sqlite3_exec(ptr,"PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL",nullptr,nullptr,nullptr);
+-        if (sqlite3_exec(ptr,"CREATE TABLE IF NOT EXISTS radar_v28_range (hash TEXT,mode INTEGER,"
++        if (sqlite3_exec(ptr,"CREATE TABLE IF NOT EXISTS radar_v33_native (hash TEXT,mode INTEGER,"
+                 "a INTEGER,b INTEGER,c INTEGER,d INTEGER,e INTEGER,f INTEGER,g INTEGER,h INTEGER,"
+                 "end_spike INTEGER,shortfall INTEGER,PRIMARY KEY(hash,mode))",nullptr,nullptr,nullptr)!=SQLITE_OK) {cache.reset();return;}
+-        readCache(ptr,"SELECT * FROM radar_v28_range",entries);
+-        auto previousTable=query(ptr,"SELECT 1 FROM sqlite_master WHERE type='table' AND name='radar_v27_mina527'");
+-        if (sqlite3_step(previousTable.get())==SQLITE_ROW)
+-            readCache(ptr,"SELECT * FROM radar_v27_mina527",previous);
++        readCache(ptr,"SELECT * FROM radar_v33_native",entries);
++        // Only 7-key scores ever included the external calculator. Recover other key modes.
++        for (const auto table : {"radar_v28_range","radar_v27_mina527"}) {
++            auto exists=query(ptr,"SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1");
++            sqlite3_bind_text(exists.get(),1,table,-1,SQLITE_STATIC);
++            if (sqlite3_step(exists.get())==SQLITE_ROW) {
++                const auto sql=std::string("SELECT * FROM ")+table+" WHERE mode<>7";
++                readCache(ptr,sql.c_str(),entries);
++            }
++        }
+         auto oldTable=query(ptr,"SELECT 1 FROM sqlite_master WHERE type='table' AND name='radar_v26'");
+         if (sqlite3_step(oldTable.get())==SQLITE_ROW)
+             readCache(ptr,"SELECT * FROM radar_v26",baseline);
+@@ -92,11 +96,10 @@ protected:
+         return lookup(entries,hash,mode);
+     }
+ public:
+-    explicit PriorChartCatalog(const std::string& file,const std::string& cachePath={}) {
++    explicit ChartCatalog(const std::string& file,const std::string& cachePath={}) {
+         const auto path=std::filesystem::u8path(file);
+         readTable(path,baseline);
+-        readTable(path.parent_path()/"charts-v27.tsv",previous);
+-        readTable(path.parent_path()/"charts-v28.tsv",entries);
++        readTable(path.parent_path()/"charts-v33.tsv",entries);
+         std::ifstream bands(std::filesystem::u8path(file).parent_path()/"bands-v26.tsv");
+         std::string hash;
+         Band band{};
+@@ -113,13 +116,13 @@ public:
+         return {};
+     }
+     std::optional<Scores> fallback(const std::string& hash,int mode=7) const {
+-        if (auto ref=lookup(previous,hash,mode)) return ref->scores;
++        if (mode==7) return find(hash,mode);
+         if (auto ref=lookup(baseline,hash,mode)) return ref->scores;
+         return {};
+     }
+     std::optional<ChartTraits> traits(const std::string& hash,int mode) const {
+         if (auto entry=finalEntry(hash,mode)) return entry->traits;
+-        if (auto ref=lookup(previous,hash,mode)) return ref->traits;
++        if (mode==7) return {};
+         if (auto ref=lookup(baseline,hash,mode)) return ref->traits;
+         return {};
+     }
+@@ -130,28 +133,28 @@ public:
+             auto path=std::filesystem::u8path(file);
+             if (!std::filesystem::exists(path)) path=std::filesystem::path(file);
+             const unsigned seed=static_cast<unsigned>(std::stoul(hash.substr(0,8),nullptr,16));
+-            auto decoded=decodeChart(path,mode,seed);
++            RadarTempo timing;
++            auto decoded=decodeChart(path,mode,seed,mode==7 ? &timing : nullptr);
+             std::string canonical=hash;
+             if (mode==7 && !levels.count(hash)) {
+                 const auto match=physicalIndex.find(physicalId(decoded));
+                 if (match!=physicalIndex.end()) canonical=match->second;
+             }
+             auto reused=canonical!=hash ? finalEntry(canonical,mode) : std::nullopt;
+-            const auto ref=lookup(baseline,canonical,mode);
+             Entry result{};
++            // A physical match can share the seven playing axes. MAINBPM votes still
++            // come from this file, including mines that do not enter its input density.
++            const double scroll=mode==7 ? ratioSoflan(decoded.notes,timing) : 0.;
+             if (reused) {
+                 result=*reused;
+             } else {
+-                auto prior=lookup(previous,hash,mode);
+-                if (!prior && canonical!=hash) prior=lookup(previous,canonical,mode);
+-                const auto mina=mode==7 && !prior ? measureMina7(decoded.notes) : std::nullopt;
+-                if (prior) result=*prior;
+-                else if (ref) result=*ref;
+-                if (mode==7 || (!prior && !ref)) {
++                auto ref=lookup(baseline,canonical,mode);
++                if (ref) result=*ref;
++                if (mode==7 || !ref) {
+                     const auto& layout=decoded.layout;
+                     const auto measured=analyze(std::move(decoded.notes),decoded.changes,
+                         layout.perSide,layout.sides,layout.scratches,decoded.total);
+-                    if (!prior && !ref) {
++                    if (!ref) {
+                         result={measured.scores,measured.passage.traits};
+                         const auto tier=levels.find(canonical);
+                         if (mode==7 && tier!=levels.end()) {
+@@ -159,17 +162,17 @@ public:
+                             result.scores=rateChart(measured,band.center,band.scratch,band.hardFactor);
+                         }
+                     }
+-                    if (mina) result.scores=combineMina(result.scores,*mina);
+                     if (mode==7) result.scores=upperRange(result.scores,measured.raw);
+                 }
+             }
++            if (mode==7) result.scores[Soflan]=scroll;
+             for (auto& score:result.scores) score=displayCents(score)/100.;
+             const auto& value=result.scores;
+             const auto& traits=result.traits;
+             std::lock_guard<std::mutex> lock(mutex);
+             if (entries.emplace(key(hash,mode),Entry{value,traits}).second && cache) {
+                 try {
+-                    auto put=query(cache.get(),"INSERT OR REPLACE INTO radar_v28_range VALUES(?,?,?,?,?,?,?,?,?,?,?,?)");
++                    auto put=query(cache.get(),"INSERT OR REPLACE INTO radar_v33_native VALUES(?,?,?,?,?,?,?,?,?,?,?,?)");
+                     sqlite3_bind_text(put.get(),1,hash.c_str(),-1,SQLITE_TRANSIENT);
+                     sqlite3_bind_int(put.get(),2,mode);
+                     for (int i=0;i<Count;++i) sqlite3_bind_int64(put.get(),3+i,displayCents(value[i]));
+@@ -182,70 +185,6 @@ public:
+         } catch(const std::exception&) { return {}; }
+     }
+ };
+-// Preserve the v30.2 catalog for the seven physical axes and gauge traits.
+-// Only complete scores with the current SOF-LAN belong in this table and cache.
+-class ChartCatalog : private PriorChartCatalog {
+-    Entries current;
+-public:
+-    explicit ChartCatalog(const std::string& file,const std::string& cachePath={})
+-      : PriorChartCatalog(file,cachePath) {
+-        readTable(std::filesystem::u8path(file).parent_path()/"charts-v32.tsv",current);
+-        if (cache) {
+-            const char* sql="CREATE TABLE IF NOT EXISTS radar_v32_ratio(hash TEXT,mode INTEGER,"
+-                "a INTEGER,b INTEGER,c INTEGER,d INTEGER,e INTEGER,f INTEGER,g INTEGER,h INTEGER,"
+-                "end_spike INTEGER,shortfall INTEGER,PRIMARY KEY(hash,mode))";
+-            if (sqlite3_exec(cache.get(),sql,nullptr,nullptr,nullptr)==SQLITE_OK)
+-                readCache(cache.get(),"SELECT * FROM radar_v32_ratio",current);
+-        }
+-    }
+-    std::optional<Scores> find(const std::string& hash,int mode=7) const {
+-        if (mode!=7) return PriorChartCatalog::find(hash,mode);
+-        std::lock_guard<std::mutex> lock(mutex);
+-        if (auto e=lookup(current,hash,mode)) return e->scores;
+-        return {};
+-    }
+-    std::optional<ChartTraits> traits(const std::string& hash,int mode) const {
+-        if (mode==7) {
+-            std::lock_guard<std::mutex> lock(mutex);
+-            if (auto e=lookup(current,hash,mode)) return e->traits;
+-        }
+-        return PriorChartCatalog::traits(hash,mode);
+-    }
+-    std::optional<Scores> fallback(const std::string& hash,int mode=7) const {
+-        if (mode==7) return find(hash,mode);
+-        return PriorChartCatalog::fallback(hash,mode);
+-    }
+-    std::optional<Scores> resolve(const std::string& hash,const std::string& file,int mode=7) {
+-        if (mode!=7) return PriorChartCatalog::resolve(hash,file,mode);
+-        if (auto found=find(hash,mode)) return found;
+-        if (file.empty()) return {};
+-        try {
+-            auto path=std::filesystem::u8path(file);
+-            if (!std::filesystem::exists(path)) path=std::filesystem::path(file);
+-            const auto seed=static_cast<unsigned>(std::stoul(hash.substr(0,8),nullptr,16));
+-            RadarTempo timing;
+-            auto chart=decodeChart(path,mode,seed,&timing);
+-            auto prior=PriorChartCatalog::resolve(hash,file,mode);
+-            auto info=PriorChartCatalog::traits(hash,mode);
+-            if (!prior || !info) return {};
+-            auto scores=*prior;
+-            scores[Soflan]=displayCents(ratioSoflan(chart.notes,timing))/100.;
+-            std::lock_guard<std::mutex> lock(mutex);
+-            if (current.emplace(key(hash,mode),Entry{scores,*info}).second && cache) {
+-                try {
+-                    auto put=query(cache.get(),"INSERT OR REPLACE INTO radar_v32_ratio VALUES(?,?,?,?,?,?,?,?,?,?,?,?)");
+-                    sqlite3_bind_text(put.get(),1,hash.c_str(),-1,SQLITE_TRANSIENT);
+-                    sqlite3_bind_int(put.get(),2,mode);
+-                    for (int i=0;i<Count;++i) sqlite3_bind_int64(put.get(),3+i,displayCents(scores[i]));
+-                    sqlite3_bind_int(put.get(),11,info->endSpike?1:0);
+-                    sqlite3_bind_int(put.get(),12,info->recoveryShortfall);
+-                    sqlite3_step(put.get());
+-                } catch (const std::exception&) {} // Read-only and busy caches still serve memory.
+-            }
+-            return scores;
+-        } catch (const std::exception&) { return {}; }
+-    }
+-};
+ inline PlayerRating loadProfile(const std::string& profilePath,const std::string& songsPath,ChartCatalog& catalog,
+                                 const std::atomic<bool>* cancel=nullptr) {
+     auto profile=readOnly(profilePath);
+diff --git a/LR2/chart_radar/tests/mina_smoke.cpp b/LR2/chart_radar/tests/mina_smoke.cpp
+deleted file mode 100644
+index 0b0a331..0000000
+--- a/LR2/chart_radar/tests/mina_smoke.cpp
++++ /dev/null
+@@ -1,89 +0,0 @@
+-#include "../mina_scale.hpp"
+-#include "../display.hpp"
+-#include "../ratio_soflan.hpp"
+-#include "../upper_range.hpp"
+-#include <iostream>
+-
+-int main() {
+-    using namespace chart_radar;
+-    // Four chart seconds across each 1% window. Two onsets one second apart
+-    // overlap for 3/400 of the chart, at half speed with two keys then one.
+-    RadarTempo tempo{{{160.,10},{80.,3},{999.,1}},{{0.,160.},{199.,80.},{206.,160.},{400.,999.}}};
+-    std::vector<Note> scroll{{0.,0.,0,0.},{200.,200.,0,0.},{200.,200.,1,0.},{201.,201.,2,0.},{400.,400.,2,0.}};
+-    const double expected=100.*std::sqrt(2.*2.*.25*.0075)/4.;
+-    if (std::abs(ratioSoflan(scroll,tempo)-expected)>1.e-9) return 30;
+-    tempo.tempos={{0.,160.},{400.,999.}};
+-    if (ratioSoflan(scroll,tempo)!=0.) return 31;
+-    std::vector<Note> keys, extended;
+-    constexpr std::array<int,8> lanes{0,4,1,5,2,6,3,4};
+-    for (unsigned i=0; i<720; ++i) {
+-        const double time=i/12.;
+-        const int lane=lanes[i%lanes.size()];
+-        keys.push_back({time,time,lane,0.});
+-        extended.push_back({time+16.,time+16.1,lane,0.});
+-        extended.push_back({time+16.,time+16.,7,0.});
+-    }
+-    auto skills=measureMina7(keys);
+-    if (!skills || std::abs((*skills)[1]-10.104)>.025 ||
+-        std::abs((*skills)[2]-6.980)>.025 || std::abs((*skills)[4]-9.453)>.025)
+-        return 1;
+-    if (skills!=measureMina7(extended) || measureMina7({{0.,0.,7,0.}})) return 2;
+-    std::vector<Note> burst;
+-    for (int i=0; i<120; ++i) burst.push_back({i*.001,i*.001,i%7,0.});
+-    if (measureMina7(burst)) return 3;
+-    Scores base{};
+-    base.fill(300.);
+-    base[Jack]=0.;
+-    const auto fused=combineMina(base,*skills);
+-    if (fused==base || fused[Jack]!=0. || fused[Peak]!=base[Peak] ||
+-        fused[Soflan]!=base[Soflan] || fused[Scratch]!=base[Scratch]) return 4;
+-    Scores rates{}, previous=base;
+-    rates[Peak]=60.4245;
+-    if (upperRange(previous,rates)!=previous) return 5;
+-    rates[Peak]*=2.;
+-    auto high=upperRange(previous,rates);
+-    if (std::abs(high[Peak]-1200.)>.01) return 6;
+-    rates[Peak]*=2.;
+-    if (upperRange(previous,rates)[Peak]<=high[Peak]) return 7;
+-    previous[Jack]=4000.;
+-    auto mixed=upperRange(previous,rates);
+-    for (int i=0;i<Count;++i)
+-        if (i!=Peak && mixed[i]!=previous[i]) return 8;
+-    if (mixed[Peak]!=upperRange(base,rates)[Peak]) return 9;
+-    std::vector<Note> repeats;
+-    for (int i=0;i<800;++i) repeats.push_back({i*.0125,i*.0125,2,0.});
+-    auto jacks=analyze(repeats);
+-    if (jacks.raw[Stair]!=0. || jacks.raw[Chord]!=0.) return 10;
+-
+-    Scores shape{};
+-    shape[Stair]=986.41; shape[Peak]=287.18; shape[Scratch]=36.33;
+-    const auto radii=makeView(shape).radii;
+-    const auto tip=Panel::point(2,radii[Stair]);
+-    if (tip.x!=456 || tip.y!=258) return 11;
+-    shape[Stair]=4000.;
+-    auto huge=makeView(shape).radii;
+-    if (Panel::point(2,huge[Stair]).x!=1023) return 12;
+-    using Band=DetailBand;
+-    if (detailBand(899.99)!=Band::Standard || detailBand(900.)!=Band::Red ||
+-        detailBand(999.99)!=Band::Red || detailBand(1000.)!=Band::Monochrome ||
+-        detailBand(1199.99)!=Band::Monochrome || detailBand(1200.)!=Band::Inverted) return 13;
+-    for (int raw=0;raw<=100;++raw)
+-        if (displayedShortfall(raw)!=std::min(100,raw*2)) return 14;
+-    // Fishpot's DELAY is 29.84 degrees wide. Check every octant and both
+-    // endpoints, including steep edges and edges shorter than the taper.
+-    for (int direction:{-1,1}) for (bool vertical:{false,true})
+-        for (int width:{1,3,7}) for (int run:{0,1,4,88,104}) {
+-            Point a{75,90},b{75+direction*run,90+direction*(run/3)};
+-            if (vertical) {std::swap(a.x,a.y);std::swap(b.x,b.y);}
+-            int atStart=0,atEnd=0,total=0;
+-            bool stray=false;
+-            rasterEdge(a,b,width,14.,[&](int x,int y) {
+-                ++total;
+-                const int major=vertical?y:x;
+-                if (major==(vertical?a.y:a.x)) {++atStart;stray|=x!=a.x || y!=a.y;}
+-                if (major==(vertical?b.y:b.x)) {++atEnd;stray|=x!=b.x || y!=b.y;}
+-            });
+-            if (stray || atStart!=1 || atEnd!=1 || total<run+1) return 15;
+-        }
+-    std::cout<<"MinaCalc 527: 7-key MSD, scratch, hold tails, long offset, density fallback and fusion passed.\n";
+-}
+diff --git a/LR2/chart_radar/tests/native_smoke.cpp b/LR2/chart_radar/tests/native_smoke.cpp
+new file mode 100644
+index 0000000..edff3fb
+--- /dev/null
++++ b/LR2/chart_radar/tests/native_smoke.cpp
+@@ -0,0 +1,67 @@
++#include "../display.hpp"
++#include "../ratio_soflan.hpp"
++#include "../upper_range.hpp"
++#include <iostream>
++
++int main() {
++    using namespace chart_radar;
++    // Four chart seconds across each 1% window. Two onsets one second apart
++    // overlap for 3/400 of the chart, at half speed with two keys then one.
++    RadarTempo tempo{{{160.,10},{80.,3},{999.,1}},{{0.,160.},{199.,80.},{206.,160.},{400.,999.}}};
++    std::vector<Note> scroll{{0.,0.,0,0.},{200.,200.,0,0.},{200.,200.,1,0.},{201.,201.,2,0.},{400.,400.,2,0.}};
++    const double expected=100.*std::sqrt(2.*2.*.25*.0075)/4.;
++    if (std::abs(ratioSoflan(scroll,tempo)-expected)>1.e-9) return 30;
++    tempo.tempos={{0.,160.},{400.,999.}};
++    if (ratioSoflan(scroll,tempo)!=0.) return 31;
++    Scores base{};
++    base.fill(300.);
++    Scores rates{}, previous=base;
++    rates[Peak]=60.4245;
++    if (upperRange(previous,rates)!=previous) return 5;
++    rates[Peak]*=2.;
++    auto high=upperRange(previous,rates);
++    if (std::abs(high[Peak]-1200.)>.01) return 6;
++    rates[Peak]*=2.;
++    if (upperRange(previous,rates)[Peak]<=high[Peak]) return 7;
++    previous[Jack]=4000.;
++    auto mixed=upperRange(previous,rates);
++    for (int i=0;i<Count;++i)
++        if (i!=Peak && mixed[i]!=previous[i]) return 8;
++    if (mixed[Peak]!=upperRange(base,rates)[Peak]) return 9;
++    std::vector<Note> repeats;
++    for (int i=0;i<800;++i) repeats.push_back({i*.0125,i*.0125,2,0.});
++    auto jacks=analyze(repeats);
++    if (jacks.raw[Stair]!=0. || jacks.raw[Chord]!=0.) return 10;
++
++    Scores shape{};
++    shape[Stair]=986.41; shape[Peak]=287.18; shape[Scratch]=36.33;
++    const auto radii=makeView(shape).radii;
++    const auto tip=Panel::point(2,radii[Stair]);
++    if (tip.x!=456 || tip.y!=258) return 11;
++    shape[Stair]=4000.;
++    auto huge=makeView(shape).radii;
++    if (Panel::point(2,huge[Stair]).x!=1023) return 12;
++    using Band=DetailBand;
++    if (detailBand(899.99)!=Band::Standard || detailBand(900.)!=Band::Red ||
++        detailBand(999.99)!=Band::Red || detailBand(1000.)!=Band::Monochrome ||
++        detailBand(1199.99)!=Band::Monochrome || detailBand(1200.)!=Band::Inverted) return 13;
++    for (int raw=0;raw<=100;++raw)
++        if (displayedShortfall(raw)!=std::min(100,raw*2)) return 14;
++    // Fishpot's DELAY is 29.84 degrees wide. Check every octant and both
++    // endpoints, including steep edges and edges shorter than the taper.
++    for (int direction:{-1,1}) for (bool vertical:{false,true})
++        for (int width:{1,3,7}) for (int run:{0,1,4,88,104}) {
++            Point a{75,90},b{75+direction*run,90+direction*(run/3)};
++            if (vertical) {std::swap(a.x,a.y);std::swap(b.x,b.y);}
++            int atStart=0,atEnd=0,total=0;
++            bool stray=false;
++            rasterEdge(a,b,width,14.,[&](int x,int y) {
++                ++total;
++                const int major=vertical?y:x;
++                if (major==(vertical?a.y:a.x)) {++atStart;stray|=x!=a.x || y!=a.y;}
++                if (major==(vertical?b.y:b.x)) {++atEnd;stray|=x!=b.x || y!=b.y;}
++            });
++            if (stray || atStart!=1 || atEnd!=1 || total<run+1) return 15;
++        }
++    std::cout << "Native radar, ratio SOF-LAN and display checks passed.\n";
++}

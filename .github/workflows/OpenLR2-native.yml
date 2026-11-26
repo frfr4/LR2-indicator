@@ -1,8 +1,8 @@
-name: OpenLR2 v32 ratio SOF-LAN
+name: OpenLR2 v33 native radar
 on:
   push:
-    branches: [radar-v32-ratio-test]
-    paths: ['.github/workflows/OpenLR2-native.yml', 'OpenLR2_SelectRadar_Addon.zip', 'MinaCalc527_Addon.zip', 'RadarV28_Addon.zip', 'RadarV29_Addon.zip', 'RadarV30_Addon.zip', 'RadarV302_Addon.zip', 'RadarV32.patch', 'charts-v32.tsv']
+    branches: [radar-v33-native-test]
+    paths: ['.github/workflows/OpenLR2-native.yml', 'OpenLR2_SelectRadar_Addon.zip', 'MinaCalc527_Addon.zip', 'RadarV28_Addon.zip', 'RadarV29_Addon.zip', 'RadarV30_Addon.zip', 'RadarV302_Addon.zip', 'RadarV32.patch', 'Native33.patch', 'charts-v33.tsv']
   workflow_dispatch:
     inputs:
       revision:
@@ -94,7 +94,8 @@ jobs:
             RadarV30_Addon.zip
             RadarV302_Addon.zip
             RadarV32.patch
-            charts-v32.tsv
+            Native33.patch
+            charts-v33.tsv
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: Apply select radar
@@ -134,6 +135,10 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           git apply --ignore-space-change radar-payload/RadarV32.patch
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git apply --check --ignore-space-change radar-payload/Native33.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git apply --ignore-space-change radar-payload/Native33.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Configure
         run: cmake --preset windows-vs-x64
         env:
@@ -152,11 +157,11 @@ jobs:
         run: |
           Expand-Archive skin.zip stage
           Copy-Item radar-source/LR2files stage/ -Recurse -Force
-          Copy-Item mina-source/LR2files stage/ -Recurse -Force
           Copy-Item range-source/LR2files stage/ -Recurse -Force
+          Remove-Item -LiteralPath stage/LR2files/Theme/KCOOL_WMIX_FHD/WMIX/select/radar/charts-v28.tsv
           Copy-Item text-source/LR2files stage/ -Recurse -Force
           Copy-Item footer-source/LR2files stage/ -Recurse -Force
-          Copy-Item radar-payload/charts-v32.tsv stage/LR2files/Theme/KCOOL_WMIX_FHD/WMIX/select/radar/
+          Copy-Item radar-payload/charts-v33.tsv stage/LR2files/Theme/KCOOL_WMIX_FHD/WMIX/select/radar/
           Copy-Item mina-source/licenses stage/ -Recurse -Force
           Copy-Item out/windows-vs-x64/RelWithDebInfo/OpenLR2_x64.exe "stage/OpenLR2_indicator Patched.exe"
           Copy-Item dep/FMOD/bin64/fmod.dll stage/
@@ -166,7 +171,7 @@ jobs:
           }
       - uses: actions/upload-artifact@v4
         with:
-          name: OpenLR2_v32_Radar_x64
+          name: OpenLR2_v33_Radar_x64
           path: stage/
           if-no-files-found: error
       - name: Check native select radar pixels
@@ -196,7 +201,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: OpenLR2_v32_RenderChecks
+          name: OpenLR2_v33_RenderChecks
           path: |
             native-frames/*.png
             native-frames/Log.txt
