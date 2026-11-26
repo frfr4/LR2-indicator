@@ -1,0 +1,389 @@
+diff --git a/LR2/LR2_bmsload.cpp b/LR2/LR2_bmsload.cpp
+index cce961f..fd59070 100644
+--- a/LR2/LR2_bmsload.cpp
++++ b/LR2/LR2_bmsload.cpp
+@@ -1,5 +1,6 @@
+ ﻿#include "LR2_bmsload.h"
+ #include "HitTrail.h"
++#include "chart_radar/gauge_reference.hpp"
+ #include "Engine.h"
+ #include "LR2_replay.h"
+ #include "Unrandomizer_SeedMap5K.h"
+@@ -3792,24 +3793,12 @@ int ParseBmsFile(gameplay *gp, CSTR filename, AUDIO *aud, ConfigStruct* cfg, BMS
+ 	//set judgetime and judgedamage
+ 	for (int p = 0; p < 2; p++) {
+ 		if (total[p] < 1) {
+-			int notes = noteCount[p];
+-			double newtotalCalc;
+-			if (notes < 400) {
+-				newtotalCalc = notes / 5.0 + 200.0;
+-			}
+-			else if (notes < 600) {
+-				newtotalCalc = (notes - 400) / 2.5 + 280.0;
+-			}
+-			else {
+-				newtotalCalc = (notes - 600) / 5.0 + 360.0;
+-			}
+-			total[p] = newtotalCalc * 0.8;
++			total[p] = static_cast<int>(chart_radar::defaultGaugeTotal(noteCount[p]));
+ 		}
+ 	}
+ 	gp->totalForDisplay[PLAYER_1] = total[PLAYER_1];
+ 	gp->totalForDisplay[PLAYER_2] = total[PLAYER_2];
+ 	for (int p : { PLAYER_1, PLAYER_2 }) {
+-		double dmg_notebase;
+ 		int notes = noteCount[p];
+ 		if (notes) {
+ 			switch (rank) {
+@@ -3855,31 +3844,7 @@ int ParseBmsFile(gameplay *gp, CSTR filename, AUDIO *aud, ConfigStruct* cfg, BMS
+ 
+ 			gp->player[p].totalnotes = notes;
+ 
+-			//TODO : check damage
+-			if (notes < 20)
+-				dmg_notebase = 10.0;
+-			else if (notes < 30)
+-				dmg_notebase = 10.0 - (notes - 20.0) / 10.0 * 2.0;
+-			else if (notes < 45)
+-				dmg_notebase = 7.0 - (notes - 30.0) / 15.0;
+-			else if (notes < 60)
+-				dmg_notebase = 6.0 - (notes - 45.0) / 15.0;
+-			else if (notes < 125)
+-				dmg_notebase = 5.0 - (notes - 60.0) / 65.0;
+-			else if (notes < 250)
+-				dmg_notebase = 4.0 - (notes - 125.0) / 125.0;
+-			else if (notes < 500)
+-				dmg_notebase = 3.0 - (notes - 250.0) / 250.0;
+-			else if (notes < 1000)
+-				dmg_notebase = 2.0 - (notes - 500.0) / 500.0;
+-			else
+-				dmg_notebase = 1;
+-			//TODO: recheck twice below.
+-			int recover = (total[p] - 80.0)*0.125 / 2;
+-			if (recover <= 0) recover = 1;
+-
+-			double dmg_totalbase = 100.0 / (double)recover;
+-			double dmg = std::max(dmg_notebase * 10, dmg_totalbase) / 10.0;
++			const double dmg = chart_radar::hardDamageMultiplier(notes, total[p]);
+ 
+ 			if (!gp->isCourse) {
+ 				gp->player[p].judge_damage[0][5] = total[p] / (float)notes;
+diff --git a/LR2/chart_radar/catalog.hpp b/LR2/chart_radar/catalog.hpp
+index 8479029..5c54025 100644
+--- a/LR2/chart_radar/catalog.hpp
++++ b/LR2/chart_radar/catalog.hpp
+@@ -24,6 +24,8 @@ class ChartCatalog {
+     struct Band { double center; int scratch; double hardFactor; };
+     using Entries = std::unordered_map<std::string,Entry>;
+     Entries entries, baseline;
++    using PoorMap = std::unordered_map<std::string,int>;
++    PoorMap poor;
+     std::unordered_map<std::string,Band> levels;
+     std::unordered_map<std::string,std::string> physicalIndex;
+     Database cache{nullptr,sqlite3_close};
+@@ -41,6 +43,16 @@ class ChartCatalog {
+                 "a INTEGER,b INTEGER,c INTEGER,d INTEGER,e INTEGER,f INTEGER,g INTEGER,h INTEGER,"
+                 "end_spike INTEGER,shortfall INTEGER,PRIMARY KEY(hash,mode))",nullptr,nullptr,nullptr)!=SQLITE_OK) {cache.reset();return;}
+         readCache(ptr,"SELECT * FROM radar_v33_native",entries);
++        if (sqlite3_exec(ptr,"CREATE TABLE IF NOT EXISTS radar_hard_poor_v1 "
++                "(hash TEXT,mode INTEGER,cents INTEGER,PRIMARY KEY(hash,mode))",nullptr,nullptr,nullptr)==SQLITE_OK) {
++            auto q=query(ptr,"SELECT hash,mode,cents FROM radar_hard_poor_v1");
++            while (sqlite3_step(q.get())==SQLITE_ROW) {
++                auto hash=reinterpret_cast<const char*>(sqlite3_column_text(q.get(),0));
++                const int cents=sqlite3_column_int(q.get(),2);
++                if (hash && sqlite3_column_bytes(q.get(),0)==32 && sqlite3_column_type(q.get(),2)==SQLITE_INTEGER && cents>=0 && cents<=9000)
++                    poor.emplace(key(hash,sqlite3_column_int(q.get(),1)),cents);
++            }
++        }
+         // Only 7-key scores ever included the external calculator. Recover other key modes.
+         for (const auto table : {"radar_v28_range","radar_v27_mina527"}) {
+             auto exists=query(ptr,"SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1");
+@@ -73,7 +85,7 @@ class ChartCatalog {
+                                 Entry{v,{late!=0,shortfall}});
+         }
+     }
+-    static void readTable(const std::filesystem::path& file,Entries& dest) {
++    static void readTable(const std::filesystem::path& file,Entries& dest,PoorMap* losses=nullptr) {
+         std::ifstream f(file);
+         std::string line;
+         while (std::getline(f,line)) {
+@@ -83,7 +95,12 @@ class ChartCatalog {
+             for (Axis a : detailOrder) in>>values[a];
+             int late=-1,shortfall=-1;
+             in>>late>>shortfall;
+-            if (in && (late==0 || late==1) && shortfall>=0 && shortfall<=100 && hash.size()==32 && std::all_of(values.begin(),values.end(),[](double v){return std::isfinite(v) && v>=0.;})) dest.emplace(hashKey(hash),Entry{values,{late!=0,shortfall}});
++            if (in && (late==0 || late==1) && shortfall>=0 && shortfall<=100 && hash.size()==32 && std::all_of(values.begin(),values.end(),[](double v){return std::isfinite(v) && v>=0.;})) {
++                auto id=hashKey(hash);
++                dest.emplace(id,Entry{values,{late!=0,shortfall}});
++                int cents;
++                if (losses && in>>cents && cents>=0 && cents<=9000) losses->emplace(id,cents);
++            }
+         }
+     }
+     static std::optional<Entry> lookup(const Entries& source,const std::string& hash,int mode) {
+@@ -99,7 +116,7 @@ public:
+     explicit ChartCatalog(const std::string& file,const std::string& cachePath={}) {
+         const auto path=std::filesystem::u8path(file);
+         readTable(path,baseline);
+-        readTable(path.parent_path()/"charts-v33.tsv",entries);
++        readTable(path.parent_path()/"charts-v33.tsv",entries,&poor);
+         std::ifstream bands(std::filesystem::u8path(file).parent_path()/"bands-v26.tsv");
+         std::string hash;
+         Band band{};
+@@ -126,8 +143,15 @@ public:
+         if (auto ref=lookup(baseline,hash,mode)) return ref->traits;
+         return {};
+     }
+-    std::optional<Scores> resolve(const std::string& hash,const std::string& file,int mode=7) {
+-        if (auto value=find(hash,mode)) return value;
++    std::optional<int> poorExtra(const std::string& hash,int mode) const {
++        std::lock_guard<std::mutex> lock(mutex);
++        const auto it=poor.find(key(hash,mode));
++        if (it==poor.end()) return {};
++        return it->second;
++    }
++    std::optional<Scores> resolve(const std::string& hash,const std::string& file,int mode=7,bool needPoor=false) {
++        const auto existing=find(hash,mode);
++        if (existing && (!needPoor || poorExtra(hash,mode).has_value())) return existing;
+         if (file.empty()) return {};
+         try {
+             auto path=std::filesystem::u8path(file);
+@@ -135,6 +159,20 @@ public:
+             const unsigned seed=static_cast<unsigned>(std::stoul(hash.substr(0,8),nullptr,16));
+             RadarTempo timing;
+             auto decoded=decodeChart(path,mode,seed,mode==7 ? &timing : nullptr);
++            const int extra=extraPoorCents(gaugeNoteCount(decoded),static_cast<int>(decoded.total));
++            {
++                std::lock_guard<std::mutex> lock(mutex);
++                if (poor.emplace(key(hash,mode),extra).second && cache) {
++                    try {
++                        auto put=query(cache.get(),"INSERT OR REPLACE INTO radar_hard_poor_v1 (hash,mode,cents) VALUES(?,?,?)");
++                        sqlite3_bind_text(put.get(),1,hash.c_str(),-1,SQLITE_TRANSIENT);
++                        sqlite3_bind_int(put.get(),2,mode);
++                        sqlite3_bind_int(put.get(),3,extra);
++                        sqlite3_step(put.get());
++                    } catch(const std::exception&) { /* Keep the selection-time value in memory. */ }
++                }
++            }
++            if (existing) return existing;
+             std::string canonical=hash;
+             if (mode==7 && !levels.count(hash)) {
+                 const auto match=physicalIndex.find(physicalId(decoded));
+diff --git a/LR2/chart_radar/gauge_reference.hpp b/LR2/chart_radar/gauge_reference.hpp
+index 918e002..7d0cc25 100644
+--- a/LR2/chart_radar/gauge_reference.hpp
++++ b/LR2/chart_radar/gauge_reference.hpp
+@@ -1,4 +1,5 @@
+ #pragma once
++#include <algorithm>
+ #include <cmath>
+ 
+ namespace chart_radar {
+@@ -8,4 +9,25 @@ inline double defaultGaugeTotal(double heads) {
+                       heads<600.?280.+(heads-400.)/2.5:360.+(heads-600.)/5.;
+     return std::floor(.8*base);
+ }
++
++// Multiplier used by the gameplay judgment table, before low-HP mitigation.
++inline double hardDamageMultiplier(int notes, int total) {
++    double noteBase;
++    if (notes < 20) noteBase = 10.;
++    else if (notes < 30) noteBase = 10. - (notes - 20.) / 10. * 2.;
++    else if (notes < 45) noteBase = 7. - (notes - 30.) / 15.;
++    else if (notes < 60) noteBase = 6. - (notes - 45.) / 15.;
++    else if (notes < 125) noteBase = 5. - (notes - 60.) / 65.;
++    else if (notes < 250) noteBase = 4. - (notes - 125.) / 125.;
++    else if (notes < 500) noteBase = 3. - (notes - 250.) / 250.;
++    else if (notes < 1000) noteBase = 2. - (notes - 500.) / 500.;
++    else noteBase = 1.;
++    const int recovery = std::max(1, (total - 80) / 16);
++    return std::max(noteBase * 10., 100. / recovery) / 10.;
++}
++
++inline int extraPoorCents(int notes, int headerTotal) {
++    const int total = headerTotal > 0 ? headerTotal : static_cast<int>(defaultGaugeTotal(notes));
++    return static_cast<int>(std::lround(100. * (10. * hardDamageMultiplier(notes, total) - 10.)));
++}
+ }
+diff --git a/LR2/chart_radar/read_sp7.hpp b/LR2/chart_radar/read_sp7.hpp
+index a3fa191..a5ed1c8 100644
+--- a/LR2/chart_radar/read_sp7.hpp
++++ b/LR2/chart_radar/read_sp7.hpp
+@@ -8,6 +8,7 @@
+ #include <filesystem>
+ #include <fstream>
+ #include <numeric>
++#include <limits>
+ #include <random>
+ #include <string_view>
+ #include <string>
+@@ -74,6 +75,20 @@ struct DecodedChart {
+     double total;
+     bms::Layout layout;
+ };
++// As in the gameplay loader, a press inside an active hold on the same lane
++// does not add a judgment. The decoder has already merged simultaneous heads.
++inline int gaugeNoteCount(const DecodedChart& chart) {
++    std::array<double, 18> occupiedUntil;
++    occupiedUntil.fill(-std::numeric_limits<double>::infinity());
++    int count = 0;
++    for (const auto& n : chart.notes) {
++        if (n.start <= occupiedUntil[n.lane]) continue;
++        occupiedUntil[n.lane] = n.end;
++        ++count;
++    }
++    return count;
++}
++
+ inline DecodedChart decodeChart(const std::filesystem::path& path,int mode,unsigned seed=0,RadarTempo* timing=nullptr) {
+     using namespace bms;
+     Layout layout(mode);
+diff --git a/LR2/chart_radar/select_canvas.hpp b/LR2/chart_radar/select_canvas.hpp
+index e500c33..7dfeb54 100644
+--- a/LR2/chart_radar/select_canvas.hpp
++++ b/LR2/chart_radar/select_canvas.hpp
+@@ -7,16 +7,16 @@
+ namespace chart_radar {
+ inline constexpr const char* assetDir="LR2files/Theme/KCOOL_WMIX_FHD/WMIX/select/radar/";
+ struct SelectCanvas {
+-    int textures[8]{-1,-1,-1,-1,-1,-1,-1,-1};
++    int textures[9]{-1,-1,-1,-1,-1,-1,-1,-1,-1};
+     double sx=1.,sy=1.;
+ #ifdef _WIN32
+     std::vector<POINTDATA> outlinePixels;
+ #endif
+-    std::chrono::steady_clock::time_point retryOptional[3]{};
++    std::chrono::steady_clock::time_point retryOptional[4]{};
+     bool load() {
+-        const char* files[]{"song.png","player.png","digits.png","tiers.png","shadows.png","traits.png","rating-text-v29.png","traits-80.png"};
+-        constexpr int widths[]{540,540,154,68,220,274,384,274};
+-        constexpr int heights[]{850,850,52,1534,1920,48,408,648};
++        const char* files[]{"song.png","player.png","digits.png","tiers.png","shadows.png","traits.png","rating-text-v29.png","traits-80.png","hard-poor.png"};
++        constexpr int widths[]{540,540,154,68,220,274,384,274,144};
++        constexpr int heights[]{850,850,52,1534,1920,48,408,648,48};
+         for (int i=0;i<std::size(files);++i) {
+             int w=0,h=0;
+             if (textures[i]>=0 && GetGraphSize(textures[i],&w,&h)==0 && w==widths[i] && h==heights[i]) continue;
+@@ -108,6 +108,24 @@ struct SelectCanvas {
+     void chartTraits(ChartTraits info) {
+         drawTraits(info.endSpike,displayedShortfall(info.recoveryShortfall));
+     }
++    // Atlas row 0 holds the label and plate, row 1 the digits, dot, p and dash.
++    void hardPoor(int cents) {
++        if (textures[8]<0) return;
++        constexpr int left=263,top=849;
++        SetDrawBright(255,255,255);
++        sprite({left,top},0,0,144,24,8);
++        char value[16];
++        if (cents==0) std::snprintf(value,sizeof(value),"-");
++        else std::snprintf(value,sizeof(value),"%d.%02dp",cents/100,cents%100);
++        int right=left+135;
++        for (const char* end=value+std::char_traits<char>::length(value);end>value;) {
++            const char c=*--end;
++            const int glyph=c=='.'?10:c=='p'?11:c=='-'?12:c-'0';
++            const int width=c=='.'?4:c=='-'?8:10;
++            right-=width;
++            sprite({right,top},11*glyph,24,width,24,8);
++        }
++    }
+     void drawTraits(bool endSpike,int percent) {
+         // The approved footer atlas keeps the original panel and text anchors.
+         // Older skins still use their original plate and number sheets.
+diff --git a/LR2/chart_radar/selector_native.hpp b/LR2/chart_radar/selector_native.hpp
+index b1686d3..c10c639 100644
+--- a/LR2/chart_radar/selector_native.hpp
++++ b/LR2/chart_radar/selector_native.hpp
+@@ -80,12 +80,14 @@ struct NativeSelector {
+         const bool song=item && (item->folderType==0 || item->folderType==5) && item->keymode>=5;
+         std::string key=song && item->hash.c_str()?hashKey(item->hash.c_str()):"";
+         std::optional<Scores> target;
++        std::optional<int> poorExtra;
+         if (song && !key.empty()) {
+             target=catalog.find(key,item->keymode);
+-            if (!target && !chartTask.valid() && (failedChart!=key || now>=chartRetry) && item->filepath.c_str()) {
++            poorExtra=catalog.poorExtra(key,item->keymode);
++            if ((!target || !poorExtra.has_value()) && !chartTask.valid() && (failedChart!=key || now>=chartRetry) && item->filepath.c_str()) {
+                 requestedChart=key;
+                 chartTask=std::async(std::launch::async,[this,key,mode=item->keymode,path=std::string(item->filepath.c_str())]{
+-                    return catalog.resolve(key,path,mode);
++                    return catalog.resolve(key,path,mode,true);
+                 });
+             }
+             if (!target && (failedChart==key || !item->filepath.c_str() || !*item->filepath.c_str()))
+@@ -101,7 +103,10 @@ struct NativeSelector {
+             motion.select(!song,key,now);
+             drawPanel(canvas,*target,!song,(!song && profile)?profile->overall:0.,motion.progress(now));
+             if (song) {
+-                if (auto info=catalog.traits(key,item->keymode)) canvas.chartTraits(*info);
++                if (auto info=catalog.traits(key,item->keymode)) {
++                    canvas.chartTraits(*info);
++                    if (poorExtra) canvas.hardPoor(*poorExtra);
++                }
+                 const auto tag=tiers.find(key);
+                 if (tag!=tiers.end()) {
+                     const double peak=*std::max_element(target->begin(),target->end());
+diff --git a/LR2/chart_radar/tests/native_smoke.cpp b/LR2/chart_radar/tests/native_smoke.cpp
+index edff3fb..b65027f 100644
+--- a/LR2/chart_radar/tests/native_smoke.cpp
++++ b/LR2/chart_radar/tests/native_smoke.cpp
+@@ -5,6 +5,9 @@
+ 
+ int main() {
+     using namespace chart_radar;
++    if (extraPoorCents(1669,180)!=667 || extraPoorCents(1689,233)!=111 ||
++        extraPoorCents(2549,300)!=0 || extraPoorCents(1500,0)!=0 ||
++        extraPoorCents(500,500)!=1000 || extraPoorCents(19,0)!=9000) return 32;
+     // Four chart seconds across each 1% window. Two onsets one second apart
+     // overlap for 3/400 of the chart, at half speed with two keys then one.
+     RadarTempo tempo{{{160.,10},{80.,3},{999.,1}},{{0.,160.},{199.,80.},{206.,160.},{400.,999.}}};
+diff --git a/LR2/chart_radar/tests/select_render.cpp b/LR2/chart_radar/tests/select_render.cpp
+index 33fab9f..52f342b 100644
+--- a/LR2/chart_radar/tests/select_render.cpp
++++ b/LR2/chart_radar/tests/select_render.cpp
+@@ -3,6 +3,8 @@
+ #include <filesystem>
+ #include <fstream>
+ #include <iostream>
++#include <set>
++#include <sstream>
+ #include <string>
+ 
+ using namespace chart_radar;
+@@ -83,6 +85,37 @@ int main(int argc,char** argv) {
+         const std::string file=(out/(backend+"-footer-"+std::to_string(percent)+".png")).string();
+         if (SaveDrawScreenToPNG(836,970,1110,994,file.c_str())<0) return 10;
+     }
++    if (canvas.textures[8]<0) return 11;
++    std::set<std::vector<unsigned>> valueImages;
++    struct PoorCase { const char* hash; const char* name; int expected; };
++    for (const PoorCase example : {
++            PoorCase{"bc058266641750aad0114546563b6004","74",667},
++            PoorCase{"7f66d4460d89ebe5e9281554d41a42d3","cherry",111},
++            PoorCase{"b22f2d866ff6e8f62b7b95e9b7fa3a9e","going",0}}) {
++        std::ifstream table(std::string(assetDir)+"charts-v33.tsv");
++        std::string row, hash;
++        Scores scores{};
++        ChartTraits traits;
++        int late=0,extra=-1;
++        while (std::getline(table,row)) {
++            std::istringstream in(row);
++            if (!(in>>hash) || hash!=example.hash) continue;
++            for (auto axis:detailOrder) in>>scores[axis];
++            if (!(in>>late>>traits.recoveryShortfall>>extra)) return 12;
++            traits.endSpike=late!=0;
++            break;
++        }
++        if (extra!=example.expected) return 13;
++        DrawBox(0,0,1920,1080,GetColor(18,21,25),TRUE);
++        drawPanel(canvas,scores,false,0.,1.);
++        canvas.chartTraits(traits);
++        canvas.hardPoor(extra);
++        std::vector<unsigned> pixels;
++        for (int y=998;y<1015;y++) for (int x=1042;x<1103;x++) pixels.push_back(DxLib::GetPixel(x,y));
++        if (!valueImages.insert(pixels).second) return 14;
++        const auto file=(out/(backend+"-poor-"+example.name+".png")).string();
++        if (SaveDrawScreenToPNG(835,969,1112,1020,file.c_str())<0) return 15;
++    }
+     DxLib_End();
+     return 0;
+ }
