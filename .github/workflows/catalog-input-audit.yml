@@ -1,0 +1,64 @@
+name: Audit catalog chart coverage (data only)
+on:
+  push:
+    branches: [analysis-tech-preview-inputs]
+    paths: ['.github/workflows/catalog-input-audit.yml']
+permissions:
+  contents: read
+jobs:
+  charts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: v43
+          persist-credentials: false
+      - name: Retrieve publicly listed note objects and verify chart identity
+        shell: python
+        run: |
+          import base64, collections, concurrent.futures, hashlib, json, re, threading, time, urllib.error, urllib.request, zipfile
+          from pathlib import Path
+          base='https://bms-score-viewer-backend.sayakaisbaka.workers.dev/bms/score/'
+          wanted={s.split()[0] for s in Path('v43/clear-v43.tsv').read_text().splitlines()}
+          counts=collections.Counter(); stop=threading.Event()
+          def read(route,timeout=30):
+              req=urllib.request.Request(base+route,headers={'User-Agent':'OpenLR2-catalog-research/1.0','Accept':'application/json'})
+              with urllib.request.urlopen(req,timeout=timeout) as resp:
+                  return json.load(resp)
+          try:
+              data=read('query',90)
+              valid={str(e['md5']).lower() for e in data if isinstance(e,dict) and 'md5'in e}
+              print('Public listing',len(valid),'catalog matches',len(valid&wanted),flush=True)
+          except Exception as exc:
+              print('Public listing unavailable',repr(exc),flush=True);valid=set()
+          musical=re.compile(rb'^#(?:[0-9]{3}(?:02|03|08|09|SC|1[1-689]|5[1-689]):|(?:BPM\w*|STOP\w*|SCROLL\w*|LNOBJ|LNTYPE|BASE|PLAYER|TOTAL|RANK|RANDOM|SETRANDOM|ENDRANDOM|IF|ELSEIF|ELSE|ENDIF)(?:\s|$))',re.I)
+          def one(h):
+              if stop.is_set():return h,None,'deferred'
+              try:
+                  data=base64.b64decode(read('get?md5='+h)['data'],validate=True)
+                  if hashlib.md5(data).hexdigest()!=h:return h,None,'md5_mismatch'
+                  nums=b'\n'.join(l.strip() for l in data.splitlines() if musical.match(l.strip()))
+                  return h,nums,'verified'
+              except urllib.error.HTTPError as exc:
+                  if exc.code in (403,429):stop.set()
+                  return h,None,'HTTP '+str(exc.code)
+              except Exception as exc:return h,None,type(exc).__name__
+          ordered=sorted(wanted & valid)
+          with zipfile.ZipFile('notes.zip','w',zipfile.ZIP_DEFLATED,compresslevel=6) as arc, concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+              for off in range(0,len(ordered),24):
+                  for h,num,status in pool.map(one,ordered[off:off+24]):
+                      counts[status]+=1
+                      if num is not None:arc.writestr(h+'.bms',num)
+                  if off%240==0:print(off,counts,flush=True)
+                  if stop.is_set():break
+                  time.sleep(.5)
+          Path('coverage.json').write_text(json.dumps({'wanted':len(wanted),'listed':len(valid),'matched':len(ordered),'responses':dict(counts)}))
+          print(counts,flush=True)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: public-numeric-chart-audit
+          path: |
+            notes.zip
+            coverage.json
+          retention-days: 3
