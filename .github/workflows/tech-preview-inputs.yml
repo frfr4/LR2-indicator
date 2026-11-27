@@ -1,0 +1,51 @@
+name: Index measured chart inputs for radar analysis
+on:
+  push:
+    branches: [analysis-tech-preview-inputs]
+    paths: ['.github/workflows/tech-preview-inputs.yml']
+permissions:
+  contents: read
+jobs:
+  index:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: v43
+          persist-credentials: false
+      - name: Extract playable timing channels from matching public chart hashes
+        shell: python
+        run: |
+          import hashlib, io, json, re, tarfile, urllib.request, zipfile
+          from pathlib import Path
+          hashes={r.split()[0] for r in Path('v43/clear-v43.tsv').read_text().splitlines()}
+          records={}
+          repo='https://codeload.github.com/darksabun/mirror/tar.gz/557c1804282527109867e45b3bf78f0715c46cf8'
+          chart=lambda n: n.lower().endswith(('.bms','.bme','.bml'))
+          # Retain only timing, branching, and playable objects. No audio or graphics.
+          playable=re.compile(rb'^#(?:[0-9]{3}(?:02|03|08|09|SC|1[1-689]|5[1-689]):|(?:BPM\w*|STOP\w*|SCROLL\w*|LNOBJ|LNTYPE|BASE|RANDOM|SETRANDOM|ENDRANDOM|IF|ELSEIF|ELSE|ENDIF)(?:\s|$))',re.I)
+          def measure(data,location):
+              md5=hashlib.md5(data).hexdigest()
+              if md5 not in hashes or md5 in records:return
+              lines=[s.strip() for s in data.splitlines() if playable.match(s.strip())]
+              records[md5]=[location,hashlib.sha256(data).hexdigest(),b'\n'.join(lines).decode('ascii','ignore')]
+          with urllib.request.urlopen(repo,timeout=120) as resp,tarfile.open(mode='r|gz',fileobj=resp) as arc:
+              for e in arc:
+                  if not e.isfile() or e.size>8000000:continue
+                  if chart(e.name):measure(arc.extractfile(e).read(),e.name)
+                  elif e.name.lower().endswith('.zip'):
+                      try:
+                          with zipfile.ZipFile(io.BytesIO(arc.extractfile(e).read())) as z:
+                              for sub in z.infolist():
+                                  if chart(sub.filename) and sub.file_size<=3000000:
+                                      measure(z.read(sub),e.name+'::'+sub.filename)
+                      except (ValueError,RuntimeError,zipfile.BadZipFile,NotImplementedError):pass
+          assert len(records)==1556,len(records)
+          assert '732abafcb87ac588b64a9be39c6deb5c' in records and 'ff5d7235ba643bc85b804a3df2778590' in records
+          Path('timing.json').write_text(json.dumps(records,separators=(',',':'),ensure_ascii=True))
+          print('Verified',len(records),'MD5 keys')
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chart-timing-inputs
+          path: timing.json
+          retention-days: 1
