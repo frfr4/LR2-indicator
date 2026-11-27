@@ -14,16 +14,36 @@ jobs:
         with:
           sparse-checkout: v42
           persist-credentials: false
-      - name: Inspect archived player XML database
+      - name: Fetch and verify the archived LR2IR player scores
         run: |
-          curl -fsSL --retry 2 https://media.githubusercontent.com/media/MellDa1024/lr2ir-getplayerxml/HEAD/getplayerxml.tar.gz -o data.tgz
+          python v42/fetch_inputs.py
+          curl -fsSL --retry 2 https://media.githubusercontent.com/media/MellDa1024/lr2ir-getplayerxml/aa3a8881c6e1d7c58ff3a68d34f7f50ff7a1124f/getplayerxml.tar.gz -o data.tgz
           echo '91483d5e4e2e91945a073e87d5e4fe13a17300399f0a588b061df33fedf32621  data.tgz' | sha256sum -c -
           tar xzf data.tgz getplayerxml.db
-          sqlite3 getplayerxml.db '.schema'
-          python - <<'PY'
-          import sqlite3
+          python -m pip install numpy
+      - name: Extract matched charts and anonymous best lamps
+        shell: python
+        run: |
+          import sqlite3, json, pathlib, numpy as np
+          from array import array
+          root=pathlib.Path("v42")
+          out=pathlib.Path("inputs")
+          out.mkdir()
+          catalog=sorted({r["md5"] for r in json.loads((root/"hscale.json").read_text())} | set(json.loads((root/"bms.json").read_text())))
           db=sqlite3.connect("file:getplayerxml.db?mode=ro",uri=True)
-          for name, in db.execute("select name from sqlite_master where type='table'"):
-              for row in db.execute("select * from ["+name+"] limit 1"):
-                  print(name,[(type(c).__name__,str(c)[:500]) for c in row])
-          PY
+          db.execute("create temp table selected(hash text primary key, chart integer)")
+          db.executemany("insert into selected values (?,?)",[(h,i) for i,h in enumerate(catalog)])
+          counts=dict(db.execute("select clear,count(*) from scores group by clear"))
+          print("Archive best-lamp counts",counts,flush=True)
+          users={}; u=array('I'); i=array('H'); lamps=array('B')
+          for pid,chart,lamp in db.execute("select s.playerid,k.chart,s.clear from scores s cross join selected k on k.hash=s.hash where s.clear between 1 and 6 and s.notes>0 and s.playerid>0"):
+              u.append(users.setdefault(pid,len(users)));i.append(chart);lamps.append(lamp)
+          rng=np.random.default_rng(430)
+          np.savez_compressed(out/"observations.npz",md5=catalog,u=rng.permutation(len(users)).astype('int32')[np.frombuffer(u,np.uint32)],i=np.frombuffer(i,np.uint16),lamp=np.frombuffer(lamps,np.uint8))
+          (out/"counts.json").write_text(json.dumps({"counts":counts,"matched_rows":len(u),"players":len(users),"source_commit":"aa3a8881c6e1d7c58ff3a68d34f7f50ff7a1124f"}))
+          print(len(u),len(users),len(catalog),flush=True)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v43-matched-observations
+          path: inputs/
+          retention-days: 14
