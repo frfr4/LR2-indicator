@@ -14,23 +14,34 @@ jobs:
         with:
           sparse-checkout: v42
           persist-credentials: false
-      - name: Fetch chart data and inspect backup
+      - name: Inspect archive sources for observed lamps
         shell: python
         run: |
-          import urllib.request, subprocess, pathlib, tarfile, shutil
-          subprocess.run(["python","v42/fetch_inputs.py"],check=True)
-          p=pathlib.Path("inputs")
-          p.mkdir()
-          url="https://raw.githubusercontent.com/seraxis/lr2ir-backup/2add57ad8de06b843304b325a16f8bf3475afe09/"+urllib.parse.quote("発狂BMS難易度表.tar.gz")
-          urllib.request.urlretrieve(url,p/"insane.tar.gz")
-          with tarfile.open(p/"insane.tar.gz") as tar:
-              files=[x for x in tar if x.isfile()]
-              print(len(files),[(x.name,x.size) for x in files[:4]])
-          for name in ["official","bms","star_mapping","attr","hscale","tachi-seed"]:
-              shutil.copy("v42/"+name+".json",p)
-          shutil.copy("OpenLR2_SelectRadar_Addon.zip",p)
+          from pathlib import Path
+          import urllib.request as http, urllib.parse as url, json, tarfile, subprocess
+          output=Path("inputs")
+          output.mkdir()
+          md5="00d6368de4e80cdaf004612699ee03df"
+          for key,link in {
+            "chart":"https://lr2db.congenial-spirits.com/chart/"+md5,
+            "stella":"https://stellaverse.cc/",
+            "ia":"https://archive.org/advancedsearch.php?"+url.urlencode({"q":"lr2ir","output":"json","rows":"80","fl[]":"identifier"}),
+            "xml":"https://media.githubusercontent.com/media/MellDa1024/lr2ir-getplayerxml/HEAD/getplayerxml.tar.gz",
+          }.items():
+              try:
+                  with http.urlopen(link,timeout=60) as response:
+                      if key=="xml":
+                          with tarfile.open(fileobj=response,mode="r|gz") as tar:
+                              for member in tar:
+                                  if member.isfile():
+                                      print(member.name,tar.extractfile(member).read(1200));break
+                      else:
+                          (output/(key+".txt")).write_bytes(response.read(500000))
+                  print(key,"OK")
+              except Exception as e: print(key,str(e))
+          http.urlretrieve("https://raw.githubusercontent.com/seraxis/lr2ir-backup/2add57ad8de06b843304b325a16f8bf3475afe09/lr2ir-userpages-top80k.7z",output/"players.7z")
       - uses: actions/upload-artifact@v4
         with:
-          name: v43-matched-inputs
+          name: v43-public-backup
           path: inputs/
-          retention-days: 14
+          retention-days: 7
