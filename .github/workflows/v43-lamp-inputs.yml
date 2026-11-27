@@ -36,7 +36,7 @@ jobs:
           counts=dict(db.execute("select clear,count(*) from scores group by clear"))
           print("Archive best-lamp counts",counts,flush=True)
           users={}; u=array('I'); i=array('H'); lamps=array('B')
-          for pid,chart,lamp in db.execute("select s.playerid,k.chart,s.clear from scores s cross join selected k on k.hash=s.hash where s.clear between 1 and 6 and s.notes>0 and s.playerid>0"):
+          for pid,chart,lamp in db.execute("select s.playerid,k.chart,s.clear from scores s cross join selected k on k.hash=s.hash where s.clear between 1 and 6 and s.notes>0 and s.playerid>0 and s.playerid not in (122738,114328,159674,162280,111023,108312,113338,104837,153667,141249,142961,145628,139857,111571,183696,144372)"):
               u.append(users.setdefault(pid,len(users)));i.append(chart);lamps.append(lamp)
           rng=np.random.default_rng(430)
           np.savez_compressed(out/"observations.npz",md5=catalog,u=rng.permutation(len(users)).astype('int32')[np.frombuffer(u,np.uint32)],i=np.frombuffer(i,np.uint16),lamp=np.frombuffer(lamps,np.uint8))
