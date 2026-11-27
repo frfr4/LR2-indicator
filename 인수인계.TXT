@@ -1,0 +1,81 @@
+﻿OpenLR2 v42 인수인계
+2026-11-27 | Windows x64 · 7키 BMS · 선곡 화면
+
+이 문서는 v42 커밋, 실행 배포본, 검증 CSV를 대조해 다시 작성한 인수인계본이다.
+
+빌드 인수인계 원칙
+매 빌드가 끝나면 마지막 작업으로 인수인계.TXT를 갱신하고 빌드 결과와 함께 전달한다. 빌드 버전과 커밋, 변경 사항, 검증에 실제로 쓴 자료와 결과, 미확인 항목 및 다음 작업을 기록한다. 다음 채팅은 이 문서에서 이어간다.
+
+1. 현재 상태
+
+v42 Windows 빌드는 성공했다. 검증에서 기준을 벗어난 채보가 남아 있어 EASY/HARD 예측 정확도는 미달이다. 다음 작업은 오차가 큰 채보의 원인을 찾아 두 게이지의 예측을 개선하는 것이다.
+
+작업 저장소   frfr4/LR2-indicator
+브랜치        radar-v42-clear-validation
+커밋          ef26390b5123a7247ed254da087ab87b39820dd0
+빌드 기반     GOMazk/OpenLR2 @ 09b666a9595d81a1f13126bcf1c1850afa83381b
+실행 파일     OpenLR2_indicator Patched.exe
+배포 ZIP      OpenLR2_v42_ClearValidation_x64.zip
+
+2. 합격 기준과 실제 결과
+
+채보별로 기준값과 소수 둘째 자리까지 표시한 예측값의 절대 차이를 구한다. EASY와 HARD를 각각 판정한다. v42 검증 코드에서는 기준값 25 미만이면 오차가 0.30 미만이어야 하고, 25 이상이면 0.20 미만이어야 한다. 정확히 0.30 또는 0.20이면 해당 구간에서 탈락이다.
+
+검증 자료는 1,252개 채보, 861개 곡 그룹이다. 같은 곡의 차분은 한 그룹에 묶어 5개 폴드 중 하나에 배정했다. 아래는 각 곡 그룹을 학습에서 제외한 차례에 얻은 예측 결과다. 해당 게이지의 기준값이 있는 채보만 집계했다.
+
+게이지   기준값       통과 / 평가     미달    최대 절대오차
+EASY     25 미만       988 / 1,213     225        2.87
+EASY     25 이상        25 /    36      11        0.47
+HARD     25 미만     1,023 / 1,099      76        0.66
+HARD     25 이상        95 /   137      42        0.78
+
+3. 선곡 화면의 값과 검증 데이터
+
+배포본의 LR2files/Theme/KCOOL_WMIX_FHD/WMIX/select/radar/clear-v42.tsv에는 MD5 기준 6,226개 채보가 있다. 7키에서 카탈로그와 해시가 맞으면 EASY와 HARD 각각에 대해 기준값을 우선 표시하고, 그 값이 비어 있으면 카탈로그의 추정값을 표시한다. 해시가 없으면 기존 계산값을 유지한다.
+
+이미 기준값이 있는 곡을 선곡해서 같은 숫자가 보이는 것은 기준값 표시 기능을 확인한 것이다. 예측 오차를 재려면 OpenLR2_v42_Calibration 안의 validation.csv에서 model이 v42이고 reference가 있는 행을 사용한다. heldout.tsv로는 기준값을 제외한 상태에서 네이티브 표시 경로를 확인할 수 있다.
+
+실제 플레이 기록과의 대조 여부
+v42는 플레이어별 LR2IR 최고 기록(PB)이나 클리어 램프를 읽어 EASY/HARD 예측과 직접 대조하지 않았다. v42/fetch_inputs.py가 가져온 HorieYuuka의 채보별 EASY/HARD 추정치와 노트 속성 등을 입력에 쓰고, v42/fit.py가 1,252개 채보에서 게이지별로 기준값이 있는 행의 예측을 Walkure의 clearDifficultyStarRatings와 비교했다. 위 표는 이 비교 결과다. 플레이어별 램프 일치율이나 실제 클리어 성공률은 v42에서 검증하지 않았다.
+
+이전 v38에는 LR2IR DB에서 MD5별 player_id와 clear_type을 조회하고 플레이어를 익명화하는 코드가 있다. 확인한 수집 실행 45833271731은 원본 DB를 읽는 단계에서 실패해 기록 추출과 업로드를 건너뛰었다. 이 실행으로 실제 기록 대조가 완료됐다고 판단할 수 없다.
+
+다음 검증에서 플레이어 기록을 사용하면 출처, 채보 수, 플레이어 수, 램프 관측 수를 남긴다. 개인별 최고 램프와 시도별 게이지 성공·실패를 구분하고, 두 게이지의 실측 기록 대조 결과와 Walkure 기준 난이도 오차를 각각 기록한다.
+
+4. 검증 재현과 다음 작업
+
+해당 커밋의 .github/workflows/OpenLR2-radar-v42.yml에 Python 버전과 의존성이 고정돼 있다. 저장소 루트에서 다음 순서로 실행한다.
+
+  python v42/fetch_inputs.py
+  python v42/fit.py calibrated
+  python v42/holdout_table.py calibrated/validation.csv calibrated/heldout.tsv
+
+fetch_inputs.py가 Walkure의 기준 난이도, HorieYuuka의 SP 채보 속성과 스케일, Tachi의 곡 식별 자료를 고정 커밋에서 수집한다. BMS 원본 파일 수집 범위는 별도로 확인해야 한다. 원본 파일이 필요한 검증에서는 담당자가 채보를 확보하고 MD5로 대조한다.
+
+오차 분석은 validation.csv에서 model=v42, pass=False인 행을 gauge와 기준값 구간별로 나눈 뒤 error_cents 내림차순으로 시작한다. error_cents가 20이면 난이도 0.20이다. 수정 전후를 같은 곡 그룹 분할로 비교하고, EASY/HARD 각 구간의 미달 수와 최대 오차를 기록한다. 배포용 카탈로그의 기준값을 검증 입력으로 쓰면 실제 예측 오차가 가려진다.
+
+선곡 UI에서 유지할 사용자 요구사항은 밀도 0 부근의 흰 테두리·그림자 없음·검은 글자, 50에 가까워질수록 강해지는 빨간 그림자, 50 이상에서 유지되는 빨간 그림자와 검은 글자다. 검증용 화면 캡처는 RenderChecks 산출물에 있다.
+
+5. 파일과 근거
+
+고정 커밋
+https://github.com/frfr4/LR2-indicator/tree/ef26390b5123a7247ed254da087ab87b39820dd0
+
+빌드 및 검증 실행 기록
+https://github.com/frfr4/LR2-indicator/actions/runs/45978779587
+
+Windows x64 배포 ZIP
+https://github.com/frfr4/LR2-indicator/actions/runs/45978779587/artifacts/15189200575
+
+검증표와 배포용 카탈로그
+https://github.com/frfr4/LR2-indicator/actions/runs/45978779587/artifacts/15188635870
+
+선곡 화면 렌더 검사
+https://github.com/frfr4/LR2-indicator/actions/runs/45978779587/artifacts/15188941207
+
+v42 학습 입력과 기준값 대조 코드
+https://github.com/frfr4/LR2-indicator/blob/ef26390b5123a7247ed254da087ab87b39820dd0/v42/fit.py
+
+v38 LR2IR 수집 코드와 해당 실행 기록
+https://github.com/frfr4/LR2-indicator/blob/ef26390b5123a7247ed254da087ab87b39820dd0/v38-ir/collect.py
+https://github.com/frfr4/LR2-indicator/actions/runs/45833271731
