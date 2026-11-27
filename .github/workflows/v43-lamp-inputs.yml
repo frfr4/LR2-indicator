@@ -14,35 +14,23 @@ jobs:
         with:
           sparse-checkout: v42
           persist-credentials: false
-      - name: Fetch pinned chart catalog and archive
-        run: |
-          python v42/fetch_inputs.py
-          curl -fL --retry 3 https://cdn.lr2ir.com/lr2ir-archive-v3.db.gz -o "$RUNNER_TEMP/archive.gz"
-          echo 'b8b94d9c67cf94411a71501c3533bd15877bd727fd687c060749fae29267b5cf  ' "$RUNNER_TEMP/archive.gz" | sha256sum -c
-          gzip -d "$RUNNER_TEMP/archive.gz"
-      - name: Extract observed best lamps
+      - name: Fetch chart data and inspect backup
         shell: python
         run: |
-          import json, os, sqlite3, shutil, gzip, csv
-          from pathlib import Path
-          out = Path("inputs")
-          out.mkdir()
-          db = sqlite3.connect(Path(os.environ["RUNNER_TEMP"])/"archive")
-          print("all lamps", db.execute("select clear_type,count(*) from pb group by clear_type").fetchall())
-          catalog = sorted({r["md5"] for r in json.loads(Path("v42/hscale.json").read_text())})
-          assert len(catalog) >= 6226
-          players = {}
-          with gzip.open(out/"observations.tsv.gz","wt", encoding="utf-8",newline="") as f:
-              writer = csv.writer(f, delimiter="\t")
-              writer.writerow(["md5","player","lamp"])
-              for h in catalog:
-                  for uid, lamp in db.execute("select player_id,clear_type from pb where md5=? and is_cheated=0 and player_id>0", (h,)):
-                      writer.writerow((h,players.setdefault(uid,len(players)),lamp))
-          print("catalog",len(catalog),"observed players",len(players))
-          for name in ["bms","star_mapping","attr","hscale","tachi-seed"]:
-              shutil.copy("v42/"+name+".json",out)
+          import urllib.request, subprocess, pathlib, tarfile, shutil
+          subprocess.run(["python","v42/fetch_inputs.py"],check=True)
+          p=pathlib.Path("inputs")
+          p.mkdir()
+          url="https://raw.githubusercontent.com/seraxis/lr2ir-backup/2add57ad8de06b843304b325a16f8bf3475afe09/"+urllib.parse.quote("発狂BMS難易度表.tar.gz")
+          urllib.request.urlretrieve(url,p/"insane.tar.gz")
+          with tarfile.open(p/"insane.tar.gz") as tar:
+              files=[x for x in tar if x.isfile()]
+              print(len(files),[(x.name,x.size) for x in files[:4]])
+          for name in ["official","bms","star_mapping","attr","hscale","tachi-seed"]:
+              shutil.copy("v42/"+name+".json",p)
+          shutil.copy("OpenLR2_SelectRadar_Addon.zip",p)
       - uses: actions/upload-artifact@v4
         with:
           name: v43-matched-inputs
           path: inputs/
-          retention-days: 7
+          retention-days: 14
