@@ -14,34 +14,16 @@ jobs:
         with:
           sparse-checkout: v42
           persist-credentials: false
-      - name: Inspect archive sources for observed lamps
-        shell: python
+      - name: Inspect archived player XML database
         run: |
-          from pathlib import Path
-          import urllib.request as http, urllib.parse as url, json, tarfile, subprocess
-          output=Path("inputs")
-          output.mkdir()
-          md5="00d6368de4e80cdaf004612699ee03df"
-          for key,link in {
-            "chart":"https://lr2db.congenial-spirits.com/chart/"+md5,
-            "stella":"https://stellaverse.cc/",
-            "ia":"https://archive.org/advancedsearch.php?"+url.urlencode({"q":"lr2ir","output":"json","rows":"80","fl[]":"identifier"}),
-            "xml":"https://media.githubusercontent.com/media/MellDa1024/lr2ir-getplayerxml/HEAD/getplayerxml.tar.gz",
-          }.items():
-              try:
-                  with http.urlopen(link,timeout=60) as response:
-                      if key=="xml":
-                          with tarfile.open(fileobj=response,mode="r|gz") as tar:
-                              for member in tar:
-                                  if member.isfile():
-                                      print(member.name,tar.extractfile(member).read(1200));break
-                      else:
-                          (output/(key+".txt")).write_bytes(response.read(500000))
-                  print(key,"OK")
-              except Exception as e: print(key,str(e))
-          http.urlretrieve("https://raw.githubusercontent.com/seraxis/lr2ir-backup/2add57ad8de06b843304b325a16f8bf3475afe09/lr2ir-userpages-top80k.7z",output/"players.7z")
-      - uses: actions/upload-artifact@v4
-        with:
-          name: v43-public-backup
-          path: inputs/
-          retention-days: 7
+          curl -fsSL --retry 2 https://media.githubusercontent.com/media/MellDa1024/lr2ir-getplayerxml/HEAD/getplayerxml.tar.gz -o data.tgz
+          echo '91483d5e4e2e91945a073e87d5e4fe13a17300399f0a588b061df33fedf32621  data.tgz' | sha256sum -c -
+          tar xzf data.tgz getplayerxml.db
+          sqlite3 getplayerxml.db '.schema'
+          python - <<'PY'
+          import sqlite3
+          db=sqlite3.connect("file:getplayerxml.db?mode=ro",uri=True)
+          for name, in db.execute("select name from sqlite_master where type='table'"):
+              for row in db.execute("select * from ["+name+"] limit 1"):
+                  print(name,[(type(c).__name__,str(c)[:500]) for c in row])
+          PY
