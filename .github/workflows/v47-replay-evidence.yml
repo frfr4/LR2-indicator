@@ -1,0 +1,40 @@
+name: Read shared LR2IR archive for chart-level evidence
+on:
+  push:
+    branches: [radar-v47-public-replay-research]
+    paths: ['v47-research/**', '.github/workflows/v47-replay-evidence.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
+        sparse-checkout: |
+          v43/clear-v43.tsv
+          v47-research
+        sparse-checkout-cone-mode: false
+    - name: Verify and unpack the public May 2026 snapshot
+      shell: bash
+      run: |
+        set -euo pipefail
+        df -h .
+        curl -fLsS --retry 2 --max-time 1400 'https://cdn.lr2ir.com/lr2ir-archive-v3.db.gz' -o lr2ir.db.gz
+        echo 'b8b94d9c67cf94411a71501c3533bd15877bd727fd687c060749fae29267b5cf  lr2ir.db.gz' | sha256sum -c -
+        gunzip lr2ir.db.gz
+        df -h .
+    - name: Aggregate anonymous chart evidence
+      run: |
+        mkdir -p result
+        python -m pip install -q numpy
+        python v47-research/replay_aggregate.py lr2ir.db v43/clear-v43.tsv result
+    - uses: actions/upload-artifact@v4
+      with:
+        name: OpenLR2-v47-public-IR-chart-evidence
+        path: result/
+        if-no-files-found: error
+        retention-days: 14
