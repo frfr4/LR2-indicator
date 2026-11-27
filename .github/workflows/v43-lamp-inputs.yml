@@ -1,0 +1,48 @@
+name: Extract LR2IR matched lamp inputs
+on:
+  push:
+    branches: [radar-v43-tech-lamps]
+    paths: ['.github/workflows/v43-lamp-inputs.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: v42
+          persist-credentials: false
+      - name: Fetch pinned chart catalog and archive
+        run: |
+          python v42/fetch_inputs.py
+          curl -fL --retry 3 https://cdn.lr2ir.com/lr2ir-archive-v3.db.gz -o "$RUNNER_TEMP/archive.gz"
+          echo 'b8b94d9c67cf94411a71501c3533bd15877bd727fd687c060749fae29267b5cf  ' "$RUNNER_TEMP/archive.gz" | sha256sum -c
+          gzip -d "$RUNNER_TEMP/archive.gz"
+      - name: Extract observed best lamps
+        shell: python
+        run: |
+          import json, os, sqlite3, shutil, gzip, csv
+          from pathlib import Path
+          out = Path("inputs")
+          out.mkdir()
+          db = sqlite3.connect(Path(os.environ["RUNNER_TEMP"])/"archive")
+          print("all lamps", db.execute("select clear_type,count(*) from pb group by clear_type").fetchall())
+          catalog = sorted({r["md5"] for r in json.loads(Path("v42/hscale.json").read_text())})
+          assert len(catalog) >= 6226
+          players = {}
+          with gzip.open(out/"observations.tsv.gz","wt", encoding="utf-8",newline="") as f:
+              writer = csv.writer(f, delimiter="\t")
+              writer.writerow(["md5","player","lamp"])
+              for h in catalog:
+                  for uid, lamp in db.execute("select player_id,clear_type from pb where md5=? and is_cheated=0 and player_id>0", (h,)):
+                      writer.writerow((h,players.setdefault(uid,len(players)),lamp))
+          print("catalog",len(catalog),"observed players",len(players))
+          for name in ["bms","star_mapping","attr","hscale","tachi-seed"]:
+              shutil.copy("v42/"+name+".json",out)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v43-matched-inputs
+          path: inputs/
+          retention-days: 7
