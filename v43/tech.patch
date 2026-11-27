@@ -1,0 +1,501 @@
+diff --git a/LR2/chart_radar/catalog.hpp b/LR2/chart_radar/catalog.hpp
+index 93d9299..aaf5596 100644
+--- a/LR2/chart_radar/catalog.hpp
++++ b/LR2/chart_radar/catalog.hpp
+@@ -4,6 +4,7 @@
+ #include "v40_scores.hpp"
+ #include "clear_estimate.hpp"
+ #include "clear_catalog.hpp"
++#include "tech.hpp"
+ #include <atomic>
+ #include <mutex>
+ #include <optional>
+@@ -23,7 +24,7 @@ class ChartCatalog {
+     mutable std::mutex mutex;
+     struct Entry { Scores scores; ChartTraits traits; std::optional<double> hard{}; };
+     using Entries = std::unordered_map<std::string,Entry>;
+-    Entries entries, baseline;
++    Entries entries, baseline, legacy;
+     v40::Grades grades;
+     v42::ClearCatalog clearCatalog;
+     using PoorMap = std::unordered_map<std::string,int>;
+@@ -41,10 +42,10 @@ class ChartCatalog {
+         if (status!=SQLITE_OK) {cache.reset();return;}
+         sqlite3_busy_timeout(ptr,350);
+         sqlite3_exec(ptr,"PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL",nullptr,nullptr,nullptr);
+-        if (sqlite3_exec(ptr,"CREATE TABLE IF NOT EXISTS radar_v40_chart (hash TEXT,mode INTEGER,"
++        if (sqlite3_exec(ptr,"CREATE TABLE IF NOT EXISTS radar_v43_chart (hash TEXT,mode INTEGER,"
+                 "a INTEGER,b INTEGER,c INTEGER,d INTEGER,e INTEGER,f INTEGER,g INTEGER,h INTEGER,"
+                 "end_spike INTEGER,shortfall INTEGER,hard REAL,PRIMARY KEY(hash,mode))",nullptr,nullptr,nullptr)!=SQLITE_OK) {cache.reset();return;}
+-        readCache(ptr,"SELECT * FROM radar_v40_chart",entries);
++        readCache(ptr,"SELECT * FROM radar_v43_chart",entries);
+         if (sqlite3_exec(ptr,"CREATE TABLE IF NOT EXISTS radar_hard_poor_v1 "
+                 "(hash TEXT,mode INTEGER,cents INTEGER,PRIMARY KEY(hash,mode))",nullptr,nullptr,nullptr)==SQLITE_OK) {
+             auto q=query(ptr,"SELECT hash,mode,cents FROM radar_hard_poor_v1");
+@@ -67,20 +68,23 @@ class ChartCatalog {
+                 statistics.emplace(key(reinterpret_cast<const char*>(sqlite3_column_text(q.get(),0)),sqlite3_column_int(q.get(),1)),row);
+             }
+         }
++        auto prior=query(ptr,"SELECT 1 FROM sqlite_master WHERE type='table' AND name='radar_v40_chart'");
++        if(sqlite3_step(prior.get())==SQLITE_ROW)
++            readCache(ptr,"SELECT * FROM radar_v40_chart",legacy,true);
+         // Only 7-key scores ever included the external calculator. Recover other key modes.
+         for (const auto table : {"radar_v39_chart","radar_v381_chart","radar_v38_chart","radar_v37_chart","radar_v36_chart","radar_v35_chord","radar_v34_phrase","radar_v33_native","radar_v28_range","radar_v27_mina527"}) {
+             auto exists=query(ptr,"SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1");
+             sqlite3_bind_text(exists.get(),1,table,-1,SQLITE_STATIC);
+             if (sqlite3_step(exists.get())==SQLITE_ROW) {
+                 const auto sql=std::string("SELECT * FROM ")+table+" WHERE mode<>7";
+-                readCache(ptr,sql.c_str(),entries);
++                readCache(ptr,sql.c_str(),entries,true);
+             }
+         }
+         auto oldTable=query(ptr,"SELECT 1 FROM sqlite_master WHERE type='table' AND name='radar_v26'");
+         if (sqlite3_step(oldTable.get())==SQLITE_ROW)
+-            readCache(ptr,"SELECT * FROM radar_v26",baseline);
++            readCache(ptr,"SELECT * FROM radar_v26",baseline,true);
+     }
+-    static void readCache(sqlite3* ptr,const char* sql,Entries& dest) {
++    static void readCache(sqlite3* ptr,const char* sql,Entries& dest,bool old=false) {
+         auto rows=query(ptr,sql);
+         while (sqlite3_step(rows.get())==SQLITE_ROW) {
+             const auto* h=sqlite3_column_text(rows.get(),0);
+@@ -92,6 +96,7 @@ class ChartCatalog {
+                 valid &= sqlite3_column_type(rows.get(),2+i)==SQLITE_INTEGER && cents>=0;
+                 v[i]=cents/100.;
+             }
++            if(old)v[Tech]=0.;
+             const int late=sqlite3_column_int(rows.get(),10),shortfall=sqlite3_column_int(rows.get(),11);
+             std::optional<double> hard;
+             if(sqlite3_column_count(rows.get())>12 && sqlite3_column_int(rows.get(),1)==7 &&
+@@ -110,6 +115,7 @@ class ChartCatalog {
+             std::string hash; in>>hash;
+             Scores values{};
+             for (Axis a : detailOrder) in>>values[a];
++            values[Tech]=0.; // This file predates TECH.
+             int late=-1,shortfall=-1;
+             in>>late>>shortfall;
+             if (in && (late==0 || late==1) && shortfall>=0 && shortfall<=100 && hash.size()==32 && std::all_of(values.begin(),values.end(),[](double v){return std::isfinite(v) && v>=0.;})) {
+@@ -138,7 +144,7 @@ public:
+         : clearCatalog(std::filesystem::u8path(file).parent_path()/"clear-v42.tsv") {
+         const auto path=std::filesystem::u8path(file);
+         readTable(path,baseline);
+-        readTable(path.parent_path()/"charts-v40.tsv",entries,&poor);
++        readTable(path.parent_path()/"charts-v40.tsv",legacy,&poor);
+         grades.load(path.parent_path()/"tiers-v40.tsv");
+         std::ifstream ids(path.parent_path()/"physical-v26.tsv");
+         std::string id,hash;
+@@ -153,16 +159,18 @@ public:
+     }
+     std::optional<double> hardEstimate(const std::string& hash,int mode=7) const {
+         if(auto entry=finalEntry(hash,mode))return entry->hard;
++        if(auto row=lookup(legacy,hash,mode))return row->hard;
+         return {};
+     }
+     std::optional<Scores> fallback(const std::string& hash,int mode=7) const {
+-        if (mode==7) return find(hash,mode);
++        if(auto row=find(hash,mode))return row;
++        if(auto row=lookup(legacy,hash,mode))return row->scores;
+         if (auto ref=lookup(baseline,hash,mode)) return ref->scores;
+         return {};
+     }
+     std::optional<ChartTraits> traits(const std::string& hash,int mode) const {
+         if (auto entry=finalEntry(hash,mode)) return entry->traits;
+-        if (mode==7) return {};
++        if(auto ref=lookup(legacy,hash,mode))return ref->traits;
+         if (auto ref=lookup(baseline,hash,mode)) return ref->traits;
+         return {};
+     }
+@@ -198,7 +206,7 @@ public:
+         const auto existing=find(hash,mode);
+         const bool missingStats=needStats && !selectionStats(hash,mode);
+         if (existing && !missingStats && (!needPoor || poorExtra(hash,mode).has_value())) return existing;
+-        if (file.empty()) return {};
++        if (file.empty()) return existing;
+         try {
+             auto path=std::filesystem::u8path(file);
+             if (!std::filesystem::exists(path)) path=std::filesystem::path(file);
+@@ -227,10 +235,14 @@ public:
+                 result.hard=hard;
+                 // Preserve the game's existing LOW.REC / END SPIKE indicators.
+                 auto match=physicalIndex.find(physicalId(decoded));
+-                auto known=match==physicalIndex.end() ? std::optional<Entry>{} : finalEntry(match->second,7);
+-                if(known) result.traits=known->traits;
++                auto known=lookup(legacy,hash,7);
++                if(!known && match!=physicalIndex.end())known=lookup(legacy,match->second,7);
++                if(known) result=*known;
+                 else if(auto ref=lookup(baseline,hash,7)) result.traits=ref->traits;
+                 else result.traits=assessPassages(decoded.notes,7,decoded.total).traits;
++                tech::apply(result.scores,decoded.notes);
++            } else if(auto cached=lookup(legacy,hash,mode)) {
++                result=*cached;
+             } else if(auto ref=lookup(baseline,hash,mode)) {
+                 result=*ref;
+             } else {
+@@ -238,13 +250,14 @@ public:
+                 auto measured=analyze(std::move(decoded.notes),decoded.changes,layout.perSide,layout.sides,layout.scratches,decoded.total);
+                 result={measured.scores,measured.passage.traits};
+             }
++            if(mode!=7)result.scores[Tech]=0.;
+             for (auto& score:result.scores) score=displayCents(score)/100.;
+             const auto& value=result.scores;
+             const auto& traits=result.traits;
+             std::lock_guard<std::mutex> lock(mutex);
+             if (entries.emplace(key(hash,mode),result).second && cache) {
+                 try {
+-                    auto put=query(cache.get(),"INSERT OR REPLACE INTO radar_v40_chart VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)");
++                    auto put=query(cache.get(),"INSERT OR REPLACE INTO radar_v43_chart VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)");
+                     sqlite3_bind_text(put.get(),1,hash.c_str(),-1,SQLITE_TRANSIENT);
+                     sqlite3_bind_int(put.get(),2,mode);
+                     for (int i=0;i<Count;++i) sqlite3_bind_int64(put.get(),3+i,displayCents(value[i]));
+@@ -255,7 +268,7 @@ public:
+                 } catch(const std::exception&) { /* The in-memory result remains available. */ }
+             }
+             return value;
+-        } catch(const std::exception&) { return {}; }
++        } catch(const std::exception&) { return existing; }
+     }
+ };
+ inline PlayerRating loadProfile(const std::string& profilePath,const std::string& songsPath,ChartCatalog& catalog,
+diff --git a/LR2/chart_radar/display.hpp b/LR2/chart_radar/display.hpp
+index b7106c3..da2bd40 100644
+--- a/LR2/chart_radar/display.hpp
++++ b/LR2/chart_radar/display.hpp
+@@ -10,7 +10,7 @@ struct Panel {
+     static constexpr int w=540, h=850, x=703, y=145;
+     static constexpr Point center{270,258};
+     static constexpr double radius=113.;
+-    static constexpr int songRowTrim=3;
++    static constexpr int songRowTrim=7;
+     static Point point(int spoke, double strength) {
+         const double angle=spoke*(6.28318530717958647693/radarClockwise.size());
+         return {center.x+static_cast<int>(std::lround(radius*strength*std::sin(angle))),
+diff --git a/LR2/chart_radar/presentation.hpp b/LR2/chart_radar/presentation.hpp
+index a7fec2b..08552e7 100644
+--- a/LR2/chart_radar/presentation.hpp
++++ b/LR2/chart_radar/presentation.hpp
+@@ -8,10 +8,9 @@ namespace chart_radar {
+ inline constexpr std::array<Axis, Count> detailOrder{
+     Density, Peak, Stair, Jack, Chord, Stamina, Scratch, Soflan
+ };
+-// Seven visible spokes. The eight-column on-disk score layout stays compatible.
+-inline constexpr std::array<Axis,7> visibleAxes{Density,Stair,Jack,Chord,Stamina,Scratch,Soflan};
+-inline constexpr std::array<Axis,7> radarClockwise{
+-    Density, Stair, Scratch, Soflan, Stamina, Jack, Chord
++inline constexpr std::array<Axis,8> visibleAxes{Density,Tech,Stair,Jack,Chord,Stamina,Scratch,Soflan};
++inline constexpr std::array<Axis,8> radarClockwise{
++    Density, Tech, Stair, Scratch, Soflan, Stamina, Jack, Chord
+ };
+ 
+ using RGB = std::array<int,3>;
+diff --git a/LR2/chart_radar/radar.hpp b/LR2/chart_radar/radar.hpp
+index 08439d7..fda8f08 100644
+--- a/LR2/chart_radar/radar.hpp
++++ b/LR2/chart_radar/radar.hpp
+@@ -18,8 +18,10 @@
+ 
+ namespace chart_radar {
+ enum Axis { Density, Stair, Scratch, Soflan, Jack, Peak, Chord, Stamina, Count };
++// The v43 cache gives the former burst column a new meaning; legacy rows are decoded separately.
++inline constexpr Axis Tech=Peak;
+ inline constexpr std::array<const char*, Count> names = {
+-    "NOTES", "DELAY", "SCRATCH", "SOF-LAN", "JACK", "PEAK", "CHORD", "STAMINA"};
++    "NOTES", "DELAY", "SCRATCH", "SOF-LAN", "JACK", "TECH", "CHORD", "STAMINA"};
+ // Times in seconds after applying BPM and STOP. 0..6 are ordered keys, 7 is scratch.
+ // A tap has end == start. Include only playable note heads in the original layout.
+ struct Note { double start, end; int lane; double beat; };
+diff --git a/LR2/chart_radar/result_stack.hpp b/LR2/chart_radar/result_stack.hpp
+index f99ce87..f91d934 100644
+--- a/LR2/chart_radar/result_stack.hpp
++++ b/LR2/chart_radar/result_stack.hpp
+@@ -11,7 +11,7 @@ struct Graphics {
+     ImageFont* bitmapFont;
+     explicit Graphics(ImageFont* skinFont=nullptr) : bitmapFont(skinFont) {
+         const std::string dir="LR2files/Theme/KCOOL_WMIX_FHD/WMIX/result/";
+-        tags=LoadGraph((dir+"personal-axes.png").c_str());
++        tags=LoadGraph((dir+"personal-axes-v43.png").c_str());
+         digits=LoadGraph((dir+"personal-digits.png").c_str());
+         font=CreateFontToHandle("Meiryo UI",17,5,DX_FONTTYPE_ANTIALIASING);
+     }
+diff --git a/LR2/chart_radar/select_canvas.hpp b/LR2/chart_radar/select_canvas.hpp
+index 3090c5c..0525403 100644
+--- a/LR2/chart_radar/select_canvas.hpp
++++ b/LR2/chart_radar/select_canvas.hpp
+@@ -15,7 +15,7 @@ struct SelectCanvas {
+ #endif
+     std::chrono::steady_clock::time_point retryOptional[5]{};
+     bool load() {
+-        const char* files[]{"song.png","player.png","digits.png","tiers.png","shadows.png","traits.png","rating-text-v29.png","traits-80.png","hard-poor-ink.png","selection-v41.png"};
++        const char* files[]{"song-v43.png","player-v43.png","digits.png","tiers.png","shadows.png","traits.png","rating-text-v29.png","traits-80.png","hard-poor-ink.png","selection-v41.png"};
+         constexpr int widths[]{540,540,154,68,220,274,384,274,400,274};
+         constexpr int heights[]{850,850,52,1534,1920,48,408,648,504,180};
+         for (int i=0;i<std::size(files);++i) {
+@@ -41,27 +41,25 @@ struct SelectCanvas {
+         for (int i=0;i<int(radarClockwise.size());++i)
+             triangle(Panel::center,Panel::point(i,1.),Panel::point((i+1)%radarClockwise.size(),1.),{25,39,52});
+         if(player) {
+-            sprite({60,539},60,539,420,72,plate);
+-            sprite({60,611},60,644,420,206,plate);
++            sprite({60,539},60,539,420,311,plate);
+             return;
+         }
+         int src=539,dest=539-78;
+         for(int row=0;row<Count;++row) {
+             const int cut=585+int(std::lround(row*32.8));
+             const int height=cut-src;
+-            // Row 1 contains the NOTES label, row 2 the retired PEAK label.
+-            if(row!=2){sprite({60,dest},60,src,420,height,plate);dest+=height;}
++            sprite({60,dest},60,src,420,height,plate);dest+=height;
+             src=cut+Panel::songRowTrim;
+         }
+         sprite({60,dest},60,src,420,850-src,plate);
+     }
+     void labels(bool player) {
+         struct Label {int u,v,w,h;};
+-        static constexpr Label labels[]={{273,40,58,18},{448,231,55,18},{405,425,78,19},
++        static constexpr Label labels[]={{273,40,58,18},{415,81,58,19},{448,231,55,18},{405,425,78,19},
+             {234,498,72,19},{53,425,77,19},{27,231,46,19},{65,81,56,20}};
+         for(int i=0;i<int(radarClockwise.size());++i) {
+             const auto l=labels[i];
+-            const double a=i*(6.283185307179586/7.),sn=std::sin(a);
++            const double a=i*(6.283185307179586/radarClockwise.size()),sn=std::sin(a);
+             const int dx=int(std::lround(135.*sn+(sn>.2?.28:sn<-.2?-.28:0.)*l.w-.5*l.w));
+             const int dy=int(std::lround(-132.*std::cos(a)-.5*l.h));
+             sprite({Panel::center.x+dx,Panel::center.y+dy},l.u,l.v,l.w,l.h,player?1:0);
+diff --git a/LR2/chart_radar/tech.hpp b/LR2/chart_radar/tech.hpp
+new file mode 100644
+index 0000000..06781f9
+--- /dev/null
++++ b/LR2/chart_radar/tech.hpp
+@@ -0,0 +1,84 @@
++#pragma once
++#include "radar.hpp"
++#include <bitset>
++#include <optional>
++#include <vector>
++
++namespace chart_radar::tech {
++struct Result {
++    double dose=0., jackShare=0., chordShare=0.;
++};
++std::optional<double> minaTechnical(const std::vector<Note>& notes);
++
++struct Row { double time; unsigned keys; };
++inline int count(unsigned mask) { return int(std::bitset<7>(mask).count()); }
++
++// Measure only transitions that mix patterns. A repeated anchor alone and a
++// repeating chord alone remain JACK and CHORD at any speed.
++inline Result measure(const std::vector<Note>& notes) {
++    std::vector<Row> rows;
++    for (const auto& n:notes) {
++        if(n.lane<0 || n.lane>=7) continue;
++        if(rows.empty() || n.start-rows.back().time>.0000005)
++            rows.push_back({n.start,0});
++        rows.back().keys|=1u<<n.lane;
++    }
++    if(rows.size()<4) return {};
++    double jack=0.,mixedJack=0.,chord=0.,mixedChord=0.;
++    double bucket=0.,sumSquares=0.,maximum=0.;
++    int active=0;
++    auto closeWindow=[&]() {
++        sumSquares+=bucket*bucket;
++        maximum=std::max(maximum,bucket);
++        ++active; bucket=0.;
++    };
++    long long window=0;
++    for(size_t i=2;i<rows.size();++i) {
++        const auto a=rows[i-2], b=rows[i-1], c=rows[i];
++        const auto index=static_cast<long long>((c.time-rows.front().time)/.5);
++        if(index!=window){closeWindow();window=index;}
++        const double dt=c.time-b.time, before=b.time-a.time;
++        if(dt<=0. || before<=0. || dt>.32 || before>.32) continue;
++        const double uneven=std::clamp((std::abs(dt-before)/(dt+before)-.10)/.48,0.,1.);
++        const int repeated=count(b.keys&c.keys);
++        const bool switches=c.keys!=b.keys;
++        const double fast=1./(1.+std::pow(dt/.15,3));
++        const double moved=double(count(b.keys^c.keys))/count(b.keys|c.keys);
++        const double anchor=repeated && switches ? moved : 0.;
++        const double stagger=switches?uneven:0.;
++        // Same-handed direction changes over three distinct, nonperiodic masks.
++        double turn=0.;
++        for(unsigned hand:{7u,120u}) {
++            const auto x=a.keys&hand,y=b.keys&hand,z=c.keys&hand;
++            if(!x || !y || !z || x==y || y==z || x==z) continue;
++            auto center=[](unsigned m) {
++                int total=0;
++                for(int k=0;k<7;++k)if(m&(1u<<k))total+=k;
++                return double(total)/count(m);
++            };
++            if((center(y)-center(x))*(center(z)-center(y))<0.) turn=1.;
++        }
++        const double irregularRepeat=(!switches && repeated)?uneven:0.;
++        const double mix=std::min(1.,anchor+.85*stagger+.60*turn+.65*irregularRepeat);
++        const double speed=std::min(28.,1./dt);
++        bucket+=fast*mix*std::sqrt(double(count(c.keys)))*std::sqrt(speed/10.);
++        const double repeatLoad=fast*repeated*speed;
++        const double chordLoad=fast*std::max(0,count(c.keys)-1)*speed;
++        jack+=repeatLoad; mixedJack+=repeatLoad*mix;
++        chord+=chordLoad; mixedChord+=chordLoad*mix;
++    }
++    closeWindow();
++    const double rms=std::sqrt(sumSquares/std::max(1,active));
++    return {std::sqrt(rms*maximum),mixedJack/std::max(1.,jack),mixedChord/std::max(1.,chord)};
++}
++inline void apply(Scores& scores,const std::vector<Note>& notes) {
++    const auto m=measure(notes);
++    scores[Tech]=0.;
++    if(m.dose<=0.)return;
++    const auto msd=minaTechnical(notes);
++    const double evidence=1.-std::exp(-m.dose/3.);
++    scores[Tech]=msd ? 21.*(*msd)*evidence : 170.*std::log1p(m.dose);
++    scores[Jack]*=1.-.52*m.jackShare;
++    scores[Chord]*=1.-.52*m.chordShare;
++}
++}
+diff --git a/LR2/chart_radar/tech_mina.cpp b/LR2/chart_radar/tech_mina.cpp
+new file mode 100644
+index 0000000..cbed29e
+--- /dev/null
++++ b/LR2/chart_radar/tech_mina.cpp
+@@ -0,0 +1,34 @@
++#include "tech.hpp"
++#include <mutex>
++#include "../../dep/Etterna/MinaCalc/MinaCalc.h"
++
++namespace chart_radar::tech {
++std::optional<double> minaTechnical(const std::vector<Note>& sortedHeads) {
++    std::vector<NoteInfo> rows;
++    double origin = 0.;
++    for (const auto& head : sortedHeads) {
++        if (head.lane < 0 || head.lane >= 7) continue;
++        if (rows.empty()) origin = head.start;
++        const double seconds = head.start - origin + .5;
++        if (!std::isfinite(seconds) || seconds < 0. || seconds >= (max_intervals-2)*.5)
++            return {};
++        const float time = static_cast<float>(seconds);
++        const unsigned mask = 1U << head.lane;
++        if (!rows.empty() && rows.back().rowTime == time)
++            rows.back().notes |= mask;
++        else
++            rows.push_back({mask,time});
++    }
++    if (rows.size() < 2) return {};
++    static std::mutex calcMutex;
++    std::lock_guard<std::mutex> lock(calcMutex);
++    static Calc calc;
++    calc.ssr = false;
++    calc.keycount = 7;
++    const auto skills = calc.CalcMain(rows,1.F,.93F);
++    if (skills.size() != NUM_Skillset || skills[Skill_Overall] <= 0.F ||
++        !std::all_of(skills.begin(),skills.end(),[](float v){ return std::isfinite(v) && v >= 0.F; }))
++        return {};
++    return skills[Skill_Technical];
++}
++}
+diff --git a/LR2/chart_radar/tests/native_smoke.cpp b/LR2/chart_radar/tests/native_smoke.cpp
+index 621b11d..0be4975 100644
+--- a/LR2/chart_radar/tests/native_smoke.cpp
++++ b/LR2/chart_radar/tests/native_smoke.cpp
+@@ -59,10 +59,10 @@ int main() {
+     shape[Stair]=986.41; shape[Peak]=287.18; shape[Scratch]=36.33;
+     const auto radii=makeView(shape).radii;
+     const auto tip=Panel::point(1,radii[Stair]);
+-    if (tip.x!=415 || tip.y!=142) return 11;
++    if (tip.x!=401 || tip.y!=127) return 11;
+     shape[Stair]=4000.;
+     auto huge=makeView(shape).radii;
+-    if (Panel::point(1,huge[Stair]).x!=859) return 12;
++    if (Panel::point(1,huge[Stair]).x!=803) return 12;
+     using Band=DetailBand;
+     if (detailBand(899.99)!=Band::Standard || detailBand(900.)!=Band::Red ||
+         detailBand(999.99)!=Band::Red || detailBand(1000.)!=Band::Monochrome ||
+diff --git a/LR2/chart_radar/tests/select_render.cpp b/LR2/chart_radar/tests/select_render.cpp
+index bd1823e..72e93f9 100644
+--- a/LR2/chart_radar/tests/select_render.cpp
++++ b/LR2/chart_radar/tests/select_render.cpp
+@@ -57,15 +57,22 @@ int main(int argc,char** argv) {
+         const std::string file=(out/(backend+"-"+scene.name+".png")).string();
+         if (SaveDrawScreenToPNG(488,0,1500,720,file.c_str())<0) return 5;
+     }
+-    // An arbitrarily large retired PEAK must not alter any displayed pixel.
++    // TECH changes the chart polygon and its numeric counter.
+     auto radarSample=[&](double peak) {
+-        Scores chart{};chart[Density]=500.;chart[Jack]=750.;chart[Peak]=peak;
++        Scores chart{};chart[Density]=500.;chart[Jack]=750.;chart[Tech]=peak;
+         DrawBox(0,0,1920,1080,GetColor(229,229,229),TRUE);drawPanel(canvas,chart,false,0.,1.);
+         std::vector<unsigned> result;
+         for(int y=232;y<890;y+=5)for(int x=795;x<1160;x+=5)result.push_back(DxLib::GetPixel(x,y));
+         return result;
+     };
+-    if(radarSample(0.)!=radarSample(4200.))return 8;
++    if(radarSample(0.)==radarSample(4200.))return 8;
++    for(bool player : {false,true}) {
++        Scores sample{}; sample[Density]=360.;sample[Tech]=600.; sample[Jack]=220.; sample[Chord]=190.;
++        DrawBox(0,0,1920,1080,GetColor(18,21,25),TRUE);
++        drawPanel(canvas,sample,player,340.,1.);
++        const auto shot=(out/(backend+(player?"-v43-player.png":"-v43-song.png"))).string();
++        if(SaveDrawScreenToPNG(745,245,1185,1030,shot.c_str())<0)return 24;
++    }
+     if(canvas.textures[9]<0)return 16;
+     DrawBox(0,0,1920,1080,GetColor(18,21,25),TRUE);
+     for(int row=0;row<4;++row)canvas.selectionRow(row,std::array<double,4>{26.5,28.,0.,50.}[row]);
+diff --git a/LR2/chart_radar/tests/tech_check.cpp b/LR2/chart_radar/tests/tech_check.cpp
+new file mode 100644
+index 0000000..79740f3
+--- /dev/null
++++ b/LR2/chart_radar/tests/tech_check.cpp
+@@ -0,0 +1,55 @@
++#include "catalog.hpp"
++#include "tech.hpp"
++#include <fstream>
++#include <iostream>
++
++using namespace chart_radar;
++static std::vector<Note> pattern(std::vector<unsigned> masks,std::vector<double> gaps) {
++    std::vector<Note> notes;
++    double time=0.;
++    for(int row=0;row<640;++row) {
++        for(int lane=0;lane<7;++lane)if(masks[row%masks.size()]&(1u<<lane))
++            notes.push_back({time,time,lane,0.});
++        time+=gaps[row%gaps.size()];
++    }
++    return notes;
++}
++static Scores evaluate(const std::vector<Note>& notes) {
++    Scores s{};s[Chord]=600.;s[Jack]=600.;tech::apply(s,notes);return s;
++}
++int main(int argc,char** argv) {
++    if(argc!=3)return 1;
++    const std::vector<double> even{.06},uneven{.034,.086};
++    const auto jack=evaluate(pattern({1},even));
++    const auto chords=evaluate(pattern({3},even));
++    const auto mixed=evaluate(pattern({3,5,9,17},even));
++    const auto roll=evaluate(pattern({1,2,4,8,16,32,64},even));
++    const auto delay=evaluate(pattern({1,2,4,8,16,32,64},uneven));
++    const auto burst=evaluate(pattern({1,4,2,8,32,16,64},even));
++    if(jack[Tech]!=0. || chords[Tech]!=0. || jack[Jack]!=600. || chords[Chord]!=600.)return 2;
++    if(mixed[Tech]<=chords[Tech] || mixed[Chord]>=chords[Chord] || mixed[Jack]>=jack[Jack])return 3;
++    if(delay[Tech]<=roll[Tech] || burst[Tech]<=roll[Tech])return 4;
++    if(!tech::minaTechnical(pattern({3,5,9,17},even)).has_value())return 5;
++    const auto notes=pattern({3,5,9,17},even);
++    auto extra=notes;for(auto& n:extra)n.end+=2.;
++    extra.push_back({45.,45.,7,0.});
++    if(evaluate(extra)!=mixed)return 6;
++    auto tmp=std::filesystem::path(argv[1]);std::filesystem::create_directories(tmp);
++    const std::string id(32,'a'); const auto file=tmp/"charts-v40.tsv";
++    std::ofstream(file)<<id<<" 100 4500 200 400 300 150 100 10 0 0 0 22\n";
++    const auto cache=(tmp/"cache.db").string();
++    {
++        ChartCatalog cc((tmp/"empty.tsv").string(),cache);
++        auto fallback=cc.fallback(id);
++        if(cc.find(id) || !fallback || (*fallback)[Tech]!=0.)return 7;
++        if(!cc.resolve(id,argv[2],7))return 8;
++        auto scores=cc.find(id);
++        if(!scores || (*scores)[Tech]==4500. || (*scores)[Density]!=100.)return 9;
++    }
++    {ChartCatalog cc((tmp/"empty.tsv").string(),cache);if(!cc.find(id))return 10;}
++    PlayerSamples player;player.add(mixed,{4,90,10,100},id);
++    if(player.finish().axes[Tech]<=0.)return 11;
++    std::cout<<"TECH pure jack "<<jack[Tech]<<" pure chord "<<chords[Tech]<<" techjack "<<mixed[Tech]
++             <<" regular roll "<<roll[Tech]<<" stagger "<<delay[Tech]<<" mixed stream "<<burst[Tech]
++             <<" mixed JACK "<<mixed[Jack]<<" mixed CHORD "<<mixed[Chord]<<"\n";
++}
