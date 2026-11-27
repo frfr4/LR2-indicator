@@ -7,6 +7,7 @@ def score_install(r):
  repl(f,'#include "scale45.hpp"','#include "scale45.hpp"\n#include "scoring46.hpp"')
  repl(f,'    return result;', '    for(int a=0;a<Count;++a)result[a]=std::round(100.*v46::corrected(x,a,result[a]))/100.;\n    return result;')
  repl(f,'parameters::curves[Count]','v46::overallCurve')
+ repl(f,'double sum=0.;for(double x:scores)sum+=x*x*x;\n    return scaled(std::cbrt(sum),v46::overallCurve);','return scaled(v46::compositeRaw(scores),v46::overallCurve);')
  f=r/'catalog.hpp';s=f.read_text()
  for name in ['charts-v','selection-v','radar_v']:
   suffix='_chart' if name=='radar_v' else '.tsv'

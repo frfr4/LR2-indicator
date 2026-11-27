@@ -1,4 +1,5 @@
 from model import *
+from joint46 import fit_compound
 from sklearn.isotonic import IsotonicRegression
 import json
 from itertools import product
@@ -101,18 +102,18 @@ def run():
    z,o,ids=blocks[tuple(sorted((i,j)))];mask=fold[ids]==j;nested[:,ids[mask]]=z[:,mask];earlier[ids[mask]]=o[mask]
   pol=select(nested,earlier,tr)
   arr,old=outer[i];v=gather(arr,pol);pred[~tr]=v[~tr]
-  xp,yp=curve(v,tr);phys[~tr]=b.eval_curve(cube(v[~tr]),xp,yp)
+  joint,_=fit_compound(v,tr);xp,yp=curve(joint[:,None],tr);phys[~tr]=b.eval_curve(joint[~tr],xp,yp)
   print('outer',i,pol,flush=True)
- pol=select(outer_candidates,og,everything);tool=tools_for(everything,old_release);final=gather(estimates(tool),pol);xp,yp=curve(final,everything)
+ pol=select(outer_candidates,og,everything);tool=tools_for(everything,old_release);final=gather(estimates(tool),pol);joint,joint_weights=fit_compound(final,everything);xp,yp=curve(joint[:,None],everything)
  assert np.isfinite(final).all() and np.min(final)>=0 and len(xp)<=18
- np.savez(P/'outputs.npz',points=final,heldout=pred,heldout_physical=phys,physical=b.eval_curve(cube(final),xp,yp))
+ np.savez(P/'outputs.npz',points=final,heldout=pred,heldout_physical=phys,physical=b.eval_curve(joint,xp,yp))
  def vec(x):return '{'+','.join(format(float(a),'.16g') for a in x)+'}'
  lines=['#pragma once','namespace chart_radar::v46 {','struct Envelope {int size;double scale[37],coeff[75];};']
  for name,models in [('cautious',tool[1]),('typical',tool[2])]:
   lines+=['inline constexpr Envelope '+name+'[]={']
   for scale,co in models:lines.append('{'+str(len(scale))+','+vec(scale)+','+vec(co)+'},')
   lines+=['};']
- lines+=['inline constexpr double policy[][3]={'+','.join(vec(choices[k]) for k in pol)+'};','inline constexpr double tailStart[]='+vec(tool[3])+';','inline constexpr double visualScale='+str(tool[4])+';','inline constexpr v44::parameters::Curve overallCurve={'+str(len(xp))+','+vec(xp)+','+vec(yp)+'};','}']
+ lines+=['inline constexpr double jointWeights[]='+vec(joint_weights)+';','inline constexpr double policy[][3]={'+','.join(vec(choices[k]) for k in pol)+'};','inline constexpr double tailStart[]='+vec(tool[3])+';','inline constexpr double visualScale='+str(tool[4])+';','inline constexpr v44::parameters::Curve overallCurve={'+str(len(xp))+','+vec(xp)+','+vec(yp)+'};','}']
  (P/'cal46.hpp').write_text('\n'.join(lines)+'\n')
  print('policy',choices[pol].tolist(),'scale',tool[4],flush=True);show(pred)
  print('SOF former31',[(v[d.calibration_group,3]-h[d.calibration_group]>200).sum() for v in [og,pred]])

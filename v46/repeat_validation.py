@@ -11,6 +11,7 @@ fold=np.array([int.from_bytes(hashlib.blake2s(('OpenLR2 axis check 2 / '+str(s))
 assert pd.DataFrame({'f':fam,'k':fold}).groupby('f').k.nunique().max()==1
 N=len(d);opts={};base={};pred=np.empty((N,8));prev=np.empty_like(pred)
 probes={v:np.empty((N,2)) for v in ['v45','v46']}
+summaries={v:np.empty(N) for v in ['v45','v46']}
 for i in range(5):
  for j in range(i+1,5):
   tr=(fold!=i)&(fold!=j);tools=t.tools_for(tr);opts[i,j]=t.estimates(tools)[:,~tr];base[i,j]=tools[0][~tr]
@@ -23,6 +24,8 @@ for i in range(5):
  rule=t.select(candidates,src,tr);tools=t.tools_for(tr);out=t.gather(t.estimates(tools),rule)
  pred[~tr]=out[~tr];prev[~tr]=tools[0][~tr]
  for name,x in [('v45',tools[0]),('v46',out)]:
+  raw=t.cube(x) if name=='v45' else t.fit_compound(x,tr)[0]
+  xp,yp=t.curve(raw[:,None],tr);summaries[name][~tr]=b.eval_curve(raw[~tr],xp,yp)
   for j,y in enumerate([b.e,b.h]):
    use=tr&np.isfinite(y)
    m=HistGradientBoostingRegressor(max_iter=100,max_leaf_nodes=9,min_samples_leaf=16,learning_rate=.06,early_stopping=False,random_state=46)
@@ -39,4 +42,10 @@ for v,p in probes.items():
   use=np.isfinite(y);delta=p[use,j]-y[use];good=b.passes(y,p[:,j])
   diag.append([v,g,sum(use),sum(good),np.abs(delta).mean(),spearmanr(p[use,j],y[use]).statistic])
 pd.DataFrame(diag,columns=['version','gauge','charts','strict_pass','MAE','Spearman']).to_csv(E/'radar_only_lamp_validation.csv',index=False,float_format='%.5f')
-print(pd.DataFrame(rows).query('1 == "ANY"') if False else [r for r in rows if r[1]=='ANY']);print(diag)
+summary=[]
+for version,prediction in summaries.items():
+ for group,use in [('ordinary_HARD',ok&clean),('HARD25plus',ok&clean&(b.h>=25))]:
+  error=prediction[use]-h[use]
+  summary.append([version,group,sum(use),np.abs(error).mean(),sum(error>200),sum(error< -200)])
+pd.DataFrame(summary,columns=['version','group','charts','mae','over200','below200']).to_csv(E/'second_split_compound.csv',index=False,float_format='%.5f')
+print([r for r in rows if r[1]=='ANY']);print(diag);print(summary)

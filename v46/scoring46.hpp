@@ -14,6 +14,21 @@ inline double visualEnergy(const ScrollContext& c){
     const double decisions=c[8]+c[9]+.12*c[6];
     return std::sqrt(change*decisions);
 }
+// The summary combines the finished scores. It cannot feed back into any axis.
+inline double compositeRaw(const Scores& scores){
+    std::array<double,2*Count+1> raw{};
+    std::copy(scores.begin(),scores.end(),raw.begin());
+    auto ranked=scores;
+    std::sort(ranked.rbegin(),ranked.rend());
+    std::copy(ranked.begin(),ranked.end(),raw.begin()+Count);
+    double cubes=0.;
+    for(double score:scores)cubes+=score*score*score;
+    raw.back()=std::cbrt(cubes);
+    double total=0.;size_t feature=0;
+    for(double onset:{0.,250.,500.,750.,1000.})
+        for(double input:raw)total+=jointWeights[feature++]*std::max(0.,input-onset);
+    return total;
+}
 inline double corrected(const v44::Sections& m,int a,double original){
     if(original<=0.)return 0.;
     std::array<double,37> x{};
