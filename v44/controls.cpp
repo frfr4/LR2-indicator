@@ -33,6 +33,16 @@ int main(int argc,char**argv) {
       for(int j=0;j<Count;++j)if(i!=j && v[j]!=s[j])return 7;
       if(v[i]<s[i]||v44::compound(v)<v44::compound(s))return 8;
     }
+    // Opposite-hand rows may hide a short burst in the global sequence.
+    std::vector<v44::HandRow> rows={{0.,1,32,0},{.08,1,16,0},{.16,2,32,0},{.24,4,16,0}};
+    std::vector<double> handBins(1);v44::handLoad(rows,handBins);
+    if(handBins[0]<=0.)return 14;
+    for(auto& r:rows){r.keys=1;r.opposite=0;}
+    handBins[0]=0.;v44::handLoad(rows,handBins);
+    if(handBins[0]!=0.)return 15;
+    std::vector<v44::HandRow> split={{0.,1,0,0},{.11,4,0,0},{.12,16,0,0},{.13,3,0,0},{.25,8,0,0}};
+    std::vector<Scores> splitBins(1);v44::addSplitChords(split,splitBins);
+    if(splitBins[0][Tech]<=0.)return 16;
     if(argc==1)return 0;
     if(argc!=4)return 9;
     const std::filesystem::path assets=argv[1],samples=argv[2],cache=argv[3];std::filesystem::create_directories(cache);

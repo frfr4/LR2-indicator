@@ -209,7 +209,7 @@ jobs:
           Copy-Item radar-payload/v44/controls.cpp LR2/chart_radar/tests/tech_check.cpp -Force
           Add-Content CMakeLists.txt 'target_link_libraries(OpenLR2RadarRenderCheck PRIVATE SQLite)'
           $sha = (Get-FileHash radar-payload/v44/data.zip -Algorithm SHA256).Hash.ToLower()
-          if ($sha -ne "7f6199249c1615ec5c2849e3ab86e1c0ecc613f879e3c5378de76bcfda38b353") { throw "v44 data checksum" }
+          if ($sha -ne "3907a26d935080a0b9a9f24d1f1553913bc448f23dc154a88e34fb20cc7bf454") { throw "v44 data checksum" }
           Expand-Archive radar-payload/v44/data.zip v44-data
       - name: Configure
         run: cmake --preset windows-vs-x64
