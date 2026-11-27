@@ -41,10 +41,10 @@ def _plain(blob):
             raise ValueError("compression") from exc
         if not decoder.eof or decoder.unused_data or len(data)>MAX_BYTES:
             raise ValueError("compressed payload")
-    data = data.strip(b"\x00\r\n\t ")
+    data = data.strip(b"\x00\r\n\t ").rstrip(b",")
     if b"," in data:
         name, option, seed, data = data.rsplit(b",",3)
-        if not name or not option.lstrip(b"-").isdigit() or not seed.lstrip(b"-").isdigit():
+        if not option.lstrip(b"-").isdigit() or not seed.lstrip(b"-").isdigit():
             raise ValueError("unsupported ghost envelope")
     return data
 
@@ -90,6 +90,8 @@ if __name__=="__main__":
         (b"ABCDE@ZZ", bytes([1,2,3,4,5]), 1),
         (b"qT@3Z", bytes([4,5,4,5,4,4,4]), 3),
         (b"player,127,245,qZZ", bytes([4,5,4,5]),0),
+        (b"player,127,245,qZZ,\r\n", bytes([4,5,4,5]),0),
+        (b"player,127,245,qZZ,,", bytes([4,5,4,5]),0),
         (b"n2r0oZ", bytes([1,5,5,4])+bytes([5])*10+bytes([1,1]),0),
         (zlib.compress(b"PQQb3ZZ"),bytes([5,3,5,2,5,2,4,1,1,1]),0),
     ]

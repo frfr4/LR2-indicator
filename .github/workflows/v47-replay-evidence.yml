@@ -25,6 +25,8 @@ jobs:
         python v47-research/ghost_decode.py
     - name: Evaluate documented public chart API on prespecified examples
       run: python v47-research/alternate_sources.py web v47-research/study_md5.txt v43/clear-v43.tsv result
+    - name: Collect public difficulty-table activity
+      run: python v47-research/bulk_table_activity.py v43/clear-v43.tsv result
     - name: Aggregate public score archive
       run: |
         curl -fLsS --retry 2 --max-time 1200 'https://media.githubusercontent.com/media/MellDa1024/lr2ir-getplayerxml/aa3a8881c6e1d7c58ff3a68d34f7f50ff7a1124f/getplayerxml.tar.gz' -o data.tar.gz

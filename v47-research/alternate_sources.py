@@ -18,7 +18,7 @@ def xml_archive(dbp,ids,out):
     names=['players','failed_best','easy_best','normal_best','hard_best','fc_best']
     agg=['count(*)']+[f'sum(s.clear={n})' for n in (1,2,3,4)]+['sum(s.clear>=5)']
     field={c.casefold():c for c in cols}
-    for aliases,kind in [(('playcount','play_count','playcnt'),'reported_plays'),(('clearcount','clear_count','clearcnt'),'reported_clears'),(('maxcombo','combo','max_combo'),'best_combo_fraction'),(('minbp','bp','badpoor','misscount'),'best_bp_per_note'),(('score','exscore'),'best_ex_fraction'),(('pgreat','perfect'),'pgreat_fraction'),(('good',),'good_fraction'),(('bad',),'bad_per_note'),(('poor',),'poor_per_note')]:
+    for aliases,kind in [(('playcount','play_count','playcnt'),'reported_plays'),(('clearcount','clear_count','clearcnt'),'reported_clears'),(('maxcombo','combo','max_combo'),'best_combo_fraction'),(('minbp','bp','badpoor','misscount'),'best_bp_per_note'),(('score','exscore'),'best_ex_fraction'),(('pg','pgreat','perfect'),'pgreat_fraction'),(('gr','great'),'great_fraction'),(('gd','good'),'good_fraction'),(('bd','bad'),'bad_per_note'),(('pr','poor'),'poor_per_note')]:
         actual=next((field[k] for k in aliases if k in field),None)
         if actual:
             x=f's."{actual}"'
@@ -54,7 +54,13 @@ def public_web(ids,out):
                 for k in np.unique(np.linspace(0,len(has)-1,min(3,len(has))).round().astype(int)):
                     r=has[k];blob=get(f'/ghosts/{h}/{int(r["player_id"])}');sampled+=1
                     try:judges,empty=decode(blob)
-                    except ValueError:counts['undecodable']+=1;continue
+                    except ValueError as exc:
+                        parts=blob.strip().rstrip(b',').split(b',')
+                        suffix=parts[-1].strip() if parts else b''
+                        counts['undecodable']+=1
+                        counts['decoder_reason_'+str(exc)[:42]]+=1
+                        counts['form_fields_'+str(min(9,len(parts)))+'_trailing_comma_'+str(blob.strip().endswith(b','))+'_endZ_'+str(suffix.endswith(b'Z'))+'_narrow_alphabet_'+str(bool(re.fullmatch(rb'[A-Za-z0-9@]+',suffix)))]+=1
+                        continue
                     arr=np.frombuffer(judges,dtype='u1');o=np.bincount(arr,minlength=6)
                     if len(arr)!=r['combo_max'] or array_counts(o,empty)!=[r[g] for g in ('pgreat','great','good','bad','poor')]:
                         counts['discordant']+=1;continue
