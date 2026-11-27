@@ -1,0 +1,355 @@
+name: OpenLR2 v47 human mechanics and gauge models
+on:
+  push:
+    branches: [radar-v47-human-mechanics]
+    paths: ['.github/workflows/OpenLR2-radar-v47.yml', 'v47/**']
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: 'OpenLR2 upstream commit or tag'
+        default: '09b666a9595d81a1f13126bcf1c1850afa83381b'
+        required: true
+permissions:
+  contents: read
+  actions: read
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: GOMazk/OpenLR2
+          ref: ${{ inputs.revision || '09b666a9595d81a1f13126bcf1c1850afa83381b' }}
+          persist-credentials: false
+      - uses: lukka/get-cmake@latest
+      - uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgJsonGlob: vcpkg.json
+          vcpkgGitCommitId: cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3
+      - name: Read chart and player radar
+        uses: actions/checkout@v4
+        with:
+          path: radar-payload
+          sparse-checkout: |
+            OpenLR2_SelectRadar_Addon.zip
+            MinaCalc527_Addon.zip
+            RadarV28_Addon.zip
+            RadarV29_Addon.zip
+            RadarV30_Addon.zip
+            RadarV302_Addon.zip
+            RadarV32.patch
+            Native33.patch
+            hard-poor.patch
+            GaugeInk.zip
+            charts-v33-hard-poor.tsv
+            charts-v34.tsv
+            radar-v34.patch
+            RadarV37.zip
+            RadarV40.zip
+            RadarV41.zip
+            v47/
+            v46/
+            v45/
+            v44/
+            v43/
+            v42/
+            .github/workflows/OpenLR2-native.yml
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Restore pinned indicator and skin payloads
+        shell: python
+        run: |
+          import base64, gzip, pathlib, re
+          workflow = pathlib.Path("radar-payload/.github/workflows/OpenLR2-native.yml").read_text(encoding="utf-8")
+          for name in ["indicator.patch", "skin.zip"]:
+              pattern = "Add-Content -Encoding ascii " + re.escape(name) + r"\.b64 '([A-Za-z0-9+/=]+)'"
+              chunks = re.findall(pattern, workflow)
+              assert chunks, name
+              pathlib.Path(name).write_bytes(gzip.decompress(base64.b64decode("".join(chunks), validate=True)))
+      - name: Verify and apply source patch
+        run: |
+          git apply --check --ignore-space-change indicator.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git apply --ignore-space-change indicator.patch
+      - name: Apply select radar
+        shell: pwsh
+        run: |
+          Expand-Archive radar-payload/OpenLR2_SelectRadar_Addon.zip radar-source
+          git apply --check --ignore-space-change radar-source/OpenLR2_SelectRadar.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git apply --ignore-space-change radar-source/OpenLR2_SelectRadar.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Expand-Archive radar-payload/MinaCalc527_Addon.zip mina-source
+          git apply --check --ignore-space-change mina-source/MinaCalc527.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git apply --ignore-space-change mina-source/MinaCalc527.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Expand-Archive radar-payload/RadarV28_Addon.zip range-source
+          git apply --check --ignore-space-change range-source/RadarV28.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git apply --ignore-space-change range-source/RadarV28.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Expand-Archive radar-payload/RadarV29_Addon.zip text-source
+          git apply --check --ignore-space-change text-source/RadarV29.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git apply --ignore-space-change text-source/RadarV29.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Expand-Archive radar-payload/RadarV30_Addon.zip outline-source
+          git apply --check --ignore-space-change outline-source/RadarV30.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git apply --ignore-space-change outline-source/RadarV30.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Expand-Archive radar-payload/RadarV302_Addon.zip footer-source
+          git apply --check --ignore-space-change footer-source/RadarV302.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git apply --ignore-space-change footer-source/RadarV302.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git apply --check --ignore-space-change radar-payload/RadarV32.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git apply --ignore-space-change radar-payload/RadarV32.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git apply --check --ignore-space-change radar-payload/Native33.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git apply --ignore-space-change radar-payload/Native33.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git apply --check --ignore-space-change radar-payload/hard-poor.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git apply --ignore-space-change radar-payload/hard-poor.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Expand-Archive radar-payload/GaugeInk.zip gauge-ink
+          git apply --check --ignore-space-change gauge-ink/GaugeInk.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git apply --ignore-space-change gauge-ink/GaugeInk.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git apply --check --ignore-space-change radar-payload/radar-v34.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git apply --ignore-space-change radar-payload/radar-v34.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Install v37 radar sources
+        shell: python
+        run: |
+          import hashlib, pathlib, zipfile, shutil
+          package = pathlib.Path("radar-payload/RadarV37.zip")
+          assert hashlib.sha256(package.read_bytes()).hexdigest() == "a09d25e1286ff7b51c357dfb58086ec23427c58dbee3d42069d5f81441c3c780"
+          with zipfile.ZipFile(package) as archive:
+              archive.extractall("v37-source")
+          base = pathlib.Path("v37-source")
+          shutil.copytree(base / "LR2", "LR2", dirs_exist_ok=True)
+          for name in ("catalog_check.cpp", "layout_controls.cpp"):
+              shutil.copyfile(base / "tests" / name, pathlib.Path("LR2/chart_radar/tests") / name)
+          with open("CMakeLists.txt", "a", encoding="utf-8") as cmake:
+              cmake.write("\ninclude(v37-source/targets.cmake)\n")
+      - name: Install v40 independent radar
+        shell: python
+        run: |
+          import hashlib, pathlib, zipfile, shutil
+          package = pathlib.Path("radar-payload/RadarV40.zip")
+          assert hashlib.sha256(package.read_bytes()).hexdigest() == "a278c24c4c81bbcb39d3e6e1fe9e245b17c4f0b151d8e5879eacfec4a1756fd7"
+          with zipfile.ZipFile(package) as archive:
+              archive.extractall("v40-source")
+          base = pathlib.Path("v40-source")
+          shutil.copytree(base / "LR2", "LR2", dirs_exist_ok=True)
+          shutil.copyfile(base/"tests/catalog_check.cpp", "LR2/chart_radar/tests/v40_catalog_check.cpp")
+          with open("CMakeLists.txt","a",encoding="utf-8") as cmake:
+              cmake.write("\ninclude(v40-source/targets.cmake)\n")
+      - name: Install seven-axis selection and chart-only predictors
+        shell: python
+        run: |
+          import hashlib, pathlib, shutil, zipfile
+          package = pathlib.Path('radar-payload/RadarV41.zip')
+          assert hashlib.sha256(package.read_bytes()).hexdigest() == 'acefad535b7b1a3908418edfbddd389122bcf47b4b9b8e6f2c8a2e0326e9dd99'
+          with zipfile.ZipFile(package) as z:
+              z.extractall('v41-source')
+          shutil.copytree('v41-source/LR2', 'LR2', dirs_exist_ok=True)
+          with open('CMakeLists.txt','a',encoding='utf8') as f:
+              f.write('\nadd_executable(OpenLR2V41Selection EXCLUDE_FROM_ALL LR2/chart_radar/tests/v41_selection.cpp)\ntarget_compile_features(OpenLR2V41Selection PRIVATE cxx_std_17)\ntarget_compile_definitions(OpenLR2V41Selection PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)\ntarget_include_directories(OpenLR2V41Selection PRIVATE LR2/chart_radar)\ntarget_link_libraries(OpenLR2V41Selection PRIVATE SQLite)\n')
+      - name: Install the v42 selection catalog
+        shell: pwsh
+        run: |
+          python radar-payload/v42/install.py .
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Copy-Item radar-payload/v42/verify.cpp LR2/chart_radar/tests/v42-verify.cpp
+          Add-Content CMakeLists.txt 'add_executable(OpenLR2V42Verify EXCLUDE_FROM_ALL LR2/chart_radar/tests/v42-verify.cpp)'
+          Add-Content CMakeLists.txt 'target_compile_features(OpenLR2V42Verify PRIVATE cxx_std_17)'
+          Add-Content CMakeLists.txt 'target_compile_definitions(OpenLR2V42Verify PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)'
+          Add-Content CMakeLists.txt 'target_include_directories(OpenLR2V42Verify PRIVATE LR2/chart_radar)'
+          Add-Content CMakeLists.txt 'target_link_libraries(OpenLR2V42Verify PRIVATE SQLite)'
+      - name: Install TECH calculation, skin labels and regression checks
+        shell: pwsh
+        run: |
+          Copy-Item LR2/chart_radar v42-regression -Recurse
+          git apply --check --ignore-space-change radar-payload/v43/tech.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git apply --ignore-space-change radar-payload/v43/tech.patch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          [IO.File]::WriteAllBytes("$pwd/v43-assets.zip",[Convert]::FromBase64String((Get-Content radar-payload/v43/assets.zip.b64 -Raw)))
+          Expand-Archive v43-assets.zip v43-assets
+          (Get-Content LR2/chart_radar/tests/v42-verify.cpp -Raw).Replace('clear-v42.tsv','clear-v43.tsv') | Set-Content -Encoding utf8 LR2/chart_radar/tests/v42-verify.cpp
+          Add-Content CMakeLists.txt @'
+          add_library(OpenLR2Tech STATIC LR2/chart_radar/tech_mina.cpp dep/Etterna/MinaCalc/MinaCalc.cpp)
+          target_compile_features(OpenLR2Tech PRIVATE cxx_std_23)
+          target_compile_definitions(OpenLR2Tech PRIVATE STANDALONE_CALC NOMINMAX WIN32_LEAN_AND_MEAN)
+          add_executable(OpenLR2V43TechCheck EXCLUDE_FROM_ALL LR2/chart_radar/tests/tech_check.cpp)
+          target_compile_features(OpenLR2V43TechCheck PRIVATE cxx_std_17)
+          target_compile_definitions(OpenLR2V43TechCheck PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+          target_include_directories(OpenLR2V43TechCheck PRIVATE LR2/chart_radar)
+          target_link_libraries(OpenLR2V43TechCheck PRIVATE SQLite OpenLR2Tech)
+          add_executable(OpenLR2V43Batch EXCLUDE_FROM_ALL LR2/chart_radar/tests/chart_batch.cpp)
+          target_compile_features(OpenLR2V43Batch PRIVATE cxx_std_17)
+          target_compile_definitions(OpenLR2V43Batch PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+          target_include_directories(OpenLR2V43Batch PRIVATE LR2/chart_radar)
+          target_link_libraries(OpenLR2V43Batch PRIVATE SQLite OpenLR2Tech)
+          foreach(t OpenLR2Lib OpenLR2V41Selection OpenLR2V42Verify OpenLR2V37Controls OpenLR2V37Catalog)
+            target_link_libraries(${t} PRIVATE OpenLR2Tech)
+          endforeach()
+          target_include_directories(OpenLR2V40Catalog BEFORE PRIVATE v42-regression)
+          '@
+      - name: Install and verify independent section model
+        shell: pwsh
+        run: |
+          python radar-payload/v44/install.py .
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Copy-Item radar-payload/v44/controls.cpp LR2/chart_radar/tests/tech_check.cpp -Force
+          Add-Content CMakeLists.txt 'target_link_libraries(OpenLR2RadarRenderCheck PRIVATE SQLite)'
+          $sha = (Get-FileHash radar-payload/v44/data.zip -Algorithm SHA256).Hash.ToLower()
+          if ($sha -ne "3907a26d935080a0b9a9f24d1f1553913bc448f23dc154a88e34fb20cc7bf454") { throw "v44 data checksum" }
+          Expand-Archive radar-payload/v44/data.zip v44-data
+      - name: Install and verify effective scroll measurement
+        shell: pwsh
+        run: |
+          python radar-payload/v45/install.py .
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ((Get-FileHash radar-payload/v45/data.zip -Algorithm SHA256).Hash.ToLower() -ne "bea836653d8915b6d88f25c4cdce06003a33d355588a53ea0439f25c192a326d") { throw "v45 data checksum" }
+          Expand-Archive radar-payload/v45/data.zip v45-data
+      - name: Install v46 local axis calibration
+        shell: pwsh
+        run: |
+          python radar-payload/v46/install.py .
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ((Get-FileHash radar-payload/v46/data.zip -Algorithm SHA256).Hash.ToLower() -ne "2e24e721f3b1be64001fecf15611f39c5f5601c0b8ab0c4055b4ce256e552f52") { throw "v46 data checksum" }
+          Expand-Archive radar-payload/v46/data.zip v46-data
+      - name: Install v47 calculator and check packaged chart data
+        shell: pwsh
+        run: |
+          python radar-payload/v47/install.py .
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python radar-payload/v47/verify_data.py radar-payload/v47/data.zip radar-payload/v43/clear-v43.tsv v47-data
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Configure
+        run: cmake --preset windows-vs-x64
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+      - name: Build
+        run: cmake --build --preset windows-vs-x64-relwithdebinfo
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+      - name: Test native 7-key calculator
+        shell: pwsh
+        run: |
+          cmake --build --preset windows-vs-x64-relwithdebinfo --target OpenLR2RadarCheck
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & ./out/windows-vs-x64/RelWithDebInfo/OpenLR2RadarCheck.exe
+      - name: Package
+        run: |
+          Expand-Archive skin.zip stage
+          Copy-Item radar-source/LR2files stage/ -Recurse -Force
+          Copy-Item range-source/LR2files stage/ -Recurse -Force
+          Remove-Item -LiteralPath stage/LR2files/Theme/KCOOL_WMIX_FHD/WMIX/select/radar/charts-v28.tsv
+          Copy-Item text-source/LR2files stage/ -Recurse -Force
+          Copy-Item footer-source/LR2files stage/ -Recurse -Force
+          Copy-Item radar-payload/charts-v33-hard-poor.tsv stage/LR2files/Theme/KCOOL_WMIX_FHD/WMIX/select/radar/charts-v33.tsv
+          Copy-Item radar-payload/charts-v34.tsv stage/LR2files/Theme/KCOOL_WMIX_FHD/WMIX/select/radar/charts-v34.tsv
+          Copy-Item v37-source/charts-v37.tsv stage/LR2files/Theme/KCOOL_WMIX_FHD/WMIX/select/radar/
+          Copy-Item v40-source/charts-v40.tsv,v40-source/tiers-v40.tsv stage/LR2files/Theme/KCOOL_WMIX_FHD/WMIX/select/radar/
+          Copy-Item v47-data/charts-v47.tsv,v47-data/selection-v47.tsv stage/LR2files/Theme/KCOOL_WMIX_FHD/WMIX/select/radar/
+          Copy-Item radar-payload/v43/clear-v43.tsv stage/LR2files/Theme/KCOOL_WMIX_FHD/WMIX/select/radar/
+          Copy-Item v41-source/selection-v41.png stage/LR2files/Theme/KCOOL_WMIX_FHD/WMIX/select/radar/
+          Copy-Item v43-assets/song-v43.png,v43-assets/player-v43.png stage/LR2files/Theme/KCOOL_WMIX_FHD/WMIX/select/radar/
+          Copy-Item v43-assets/personal-axes-v43.png stage/LR2files/Theme/KCOOL_WMIX_FHD/WMIX/result/
+          Copy-Item gauge-ink/hard-poor-ink.png stage/LR2files/Theme/KCOOL_WMIX_FHD/WMIX/select/radar/
+          Copy-Item gauge-ink/traits-80.png stage/LR2files/Theme/KCOOL_WMIX_FHD/WMIX/select/radar/ -Force
+          Copy-Item mina-source/licenses stage/ -Recurse -Force
+          Copy-Item radar-payload/v42/Walkure-LICENSE.txt stage/licenses/
+          Copy-Item out/windows-vs-x64/RelWithDebInfo/OpenLR2_x64.exe "stage/OpenLR2_indicator Patched.exe"
+          Copy-Item dep/FMOD/bin64/fmod.dll stage/
+          $select = 'LR2files/Theme/KCOOL_WMIX_FHD/WMIX/select'
+          foreach ($file in @('OpenLR2_indicator Patched.exe', 'fmod.dll', "$select/select_radar.lr2skin", "$select/radar/song.png", "$select/radar/player.png", "$select/radar/shadows.png", "$select/radar/rating-text-v29.png", "$select/radar/traits-80.png")) {
+            if (!(Test-Path -LiteralPath (Join-Path stage $file) -PathType Leaf)) { throw "Missing package file $file" }
+          }
+      - name: Verify axis isolation and all 31 grade gates
+        shell: pwsh
+        run: |
+          cmake --build --preset windows-vs-x64-relwithdebinfo --target OpenLR2V37Controls OpenLR2V40Catalog OpenLR2V41Selection OpenLR2V42Verify OpenLR2V43TechCheck OpenLR2V43Batch
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & ./out/windows-vs-x64/RelWithDebInfo/OpenLR2V42Verify.exe radar-payload/v43/clear-v43.tsv v40-source/tests/fixture.bms v42-check
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & ./out/windows-vs-x64/RelWithDebInfo/OpenLR2V42Verify.exe radar-payload/v43/heldout.tsv v40-source/tests/fixture.bms v42-heldout
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & ./out/windows-vs-x64/RelWithDebInfo/OpenLR2V43TechCheck.exe stage/LR2files/Theme/KCOOL_WMIX_FHD/WMIX/select/radar v44-data/samples v44-check
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & ./out/windows-vs-x64/RelWithDebInfo/OpenLR2V41Selection.exe v41-check
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & ./out/windows-vs-x64/RelWithDebInfo/OpenLR2V37Controls.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & ./out/windows-vs-x64/RelWithDebInfo/OpenLR2V40Catalog.exe stage/LR2files/Theme/KCOOL_WMIX_FHD/WMIX/select/radar v40-source/tests v40-catalog-test
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Verify v47 selection, scoring and gauge behavior
+        shell: pwsh
+        run: |
+          cmake --build --preset windows-vs-x64-relwithdebinfo --target OpenLR2V47Check
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & ./out/windows-vs-x64/RelWithDebInfo/OpenLR2V47Check.exe v47-native-check
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Check native select radar pixels
+        shell: pwsh
+        run: |
+          cmake --build --preset windows-vs-x64-relwithdebinfo --target OpenLR2RadarRenderCheck
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $check = (Resolve-Path out/windows-vs-x64/RelWithDebInfo/OpenLR2RadarRenderCheck.exe)
+          $frames = New-Item -ItemType Directory -Force native-frames
+          Push-Location stage
+          $completed = @()
+          foreach ($backend in @('software', 'dx9', 'dx11')) {
+            $process = Start-Process -FilePath $check -ArgumentList $backend -WorkingDirectory (Get-Location).Path -NoNewWindow -PassThru
+            if (!$process.WaitForExit(60000)) { $process.Kill(); $process.WaitForExit() }
+            $code = $process.ExitCode
+            if ($code -eq 0) { $completed += $backend; continue }
+            if (Test-Path (Join-Path $frames.FullName "$backend.ready")) { throw "$backend pixel test failed after initialization ($code)" }
+            Write-Host "$backend framebuffer unavailable on this host ($code)"
+          }
+          Pop-Location
+          if ($completed.Count -eq 0) { throw "No native framebuffer available" }
+          foreach ($backend in $completed) {
+            & ./gauge-ink/check-footer.ps1 -Backend $backend -Frames $frames.FullName
+          }
+          Write-Host "Completed native pixel checks with $completed"
+          if (Test-Path stage/Log.txt) { Move-Item stage/Log.txt native-frames/Log.txt -Force }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: OpenLR2_v47_RenderChecks
+          path: |
+            native-frames/*.png
+            native-frames/Log.txt
+            stage/Log.txt
+            out/windows-vs-x64/RelWithDebInfo/Log.txt
+          if-no-files-found: ignore
+
+      - name: Verify the Windows game files
+        shell: pwsh
+        run: |
+          $radar='stage/LR2files/Theme/KCOOL_WMIX_FHD/WMIX/select/radar'
+          foreach ($name in @('charts-v47.tsv','selection-v47.tsv','clear-v43.tsv')) {
+            if ((Get-Content "$radar/$name").Count -ne 6226) { throw "catalog count $name" }
+          }
+          if (!(Test-Path 'stage/OpenLR2_indicator Patched.exe')) { throw 'missing executable' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenLR2_v47_Windows_x64
+          path: stage/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenLR2_v47_Native_Source_Data
+          path: radar-payload/v47/
+          if-no-files-found: error
