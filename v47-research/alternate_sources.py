@@ -13,7 +13,13 @@ def xml_archive(dbp,ids,out):
     assert {'hash','clear','notes','playerid'}<=cols
     db.execute('create temp table selected(hash text primary key) without rowid')
     db.executemany('insert into selected values (?)',[(v,) for v in ids])
-    rule='s.clear between 1 and 6 and s.notes>0 and s.playerid>0 and s.playerid not in (122738,114328,159674,162280,111023,108312,113338,104837,153667,141249,142961,145628,139857,111571,183696,144372)'
+    # Use the exact historical eligibility rule without duplicating its account list.
+    policy=Path('.github/workflows/v43-lamp-inputs.yml').read_text()
+    matched=re.search(r's\.playerid not in \(([0-9, ]+)\)', policy)
+    if not matched:raise ValueError('missing frozen eligibility filter')
+    exclusions=[int(x) for x in matched[1].split(',')]
+    placeholders=','.join('?' for _ in exclusions)
+    rule=f's.clear between 1 and 6 and s.notes>0 and s.playerid>0 and s.playerid not in ({placeholders})'
     # No identities, comments, or high-score replay records are exported.
     names=['players','failed_best','easy_best','normal_best','hard_best','fc_best']
     agg=['count(*)']+[f'sum(s.clear={n})' for n in (1,2,3,4)]+['sum(s.clear>=5)']
@@ -25,7 +31,7 @@ def xml_archive(dbp,ids,out):
             agg.append(f'sum({x})' if kind.startswith('reported') else f'avg(CASE WHEN {x}>=0 THEN 1.0*{x}/s.notes/{2 if kind=="best_ex_fraction" else 1} END)')
             names.append(kind)
     db.commit()
-    data=db.execute(f"select s.hash,{','.join(agg)} from scores s cross join selected a on a.hash=s.hash where {rule} group by s.hash").fetchall()
+    data=db.execute(f"select s.hash,{','.join(agg)} from scores s cross join selected a on a.hash=s.hash where {rule} group by s.hash", exclusions).fetchall()
     with (out/'independent_xml_by_chart.csv').open('w') as f:
         w=csv.writer(f);w.writerow(['md5',*names]);w.writerows(data)
     return {'schema':sorted(cols),'source':'MellDa1024/lr2ir-getplayerxml','source_commit':'aa3a8881c6e1d7c58ff3a68d34f7f50ff7a1124f','sha256_compressed':'91483d5e4e2e91945a073e87d5e4fe13a17300399f0a588b061df33fedf32621','rows':sum(r[1] for r in data),'charts':len(data)}

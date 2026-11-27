@@ -1,8 +1,5 @@
 name: Read shared LR2IR archive for chart-level evidence
 on:
-  push:
-    branches: [radar-v47-public-replay-research]
-    paths: ['v47-research/**', '.github/workflows/v47-replay-evidence.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -16,6 +13,7 @@ jobs:
         persist-credentials: false
         sparse-checkout: |
           v43/clear-v43.tsv
+          .github/workflows/v43-lamp-inputs.yml
           v47-research
         sparse-checkout-cone-mode: false
     - name: Prepare verified inputs
