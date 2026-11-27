@@ -1,5 +1,5 @@
 diff --git a/LR2/chart_radar/catalog.hpp b/LR2/chart_radar/catalog.hpp
-index 93d9299..aaf5596 100644
+index 93d9299..1d64b25 100644
 --- a/LR2/chart_radar/catalog.hpp
 +++ b/LR2/chart_radar/catalog.hpp
 @@ -4,6 +4,7 @@
@@ -67,24 +67,38 @@ index 93d9299..aaf5596 100644
              const int late=sqlite3_column_int(rows.get(),10),shortfall=sqlite3_column_int(rows.get(),11);
              std::optional<double> hard;
              if(sqlite3_column_count(rows.get())>12 && sqlite3_column_int(rows.get(),1)==7 &&
+@@ -102,7 +107,7 @@ class ChartCatalog {
+                                 Entry{v,{late!=0,shortfall},hard});
+         }
+     }
+-    static void readTable(const std::filesystem::path& file,Entries& dest,PoorMap* losses=nullptr) {
++    static void readTable(const std::filesystem::path& file,Entries& dest,PoorMap* losses=nullptr,bool old=true) {
+         std::ifstream f(file);
+         std::string line;
+         while (std::getline(f,line)) {
 @@ -110,6 +115,7 @@ class ChartCatalog {
              std::string hash; in>>hash;
              Scores values{};
              for (Axis a : detailOrder) in>>values[a];
-+            values[Tech]=0.; // This file predates TECH.
++            if(old)values[Tech]=0.; // This file predates TECH.
              int late=-1,shortfall=-1;
              in>>late>>shortfall;
              if (in && (late==0 || late==1) && shortfall>=0 && shortfall<=100 && hash.size()==32 && std::all_of(values.begin(),values.end(),[](double v){return std::isfinite(v) && v>=0.;})) {
-@@ -138,7 +144,7 @@ public:
-         : clearCatalog(std::filesystem::u8path(file).parent_path()/"clear-v42.tsv") {
+@@ -135,10 +141,11 @@ class ChartCatalog {
+     }
+ public:
+     explicit ChartCatalog(const std::string& file,const std::string& cachePath={})
+-        : clearCatalog(std::filesystem::u8path(file).parent_path()/"clear-v42.tsv") {
++        : clearCatalog(std::filesystem::u8path(file).parent_path()/"clear-v43.tsv") {
          const auto path=std::filesystem::u8path(file);
          readTable(path,baseline);
 -        readTable(path.parent_path()/"charts-v40.tsv",entries,&poor);
 +        readTable(path.parent_path()/"charts-v40.tsv",legacy,&poor);
++        readTable(path.parent_path()/"charts-v43.tsv",entries,&poor,false);
          grades.load(path.parent_path()/"tiers-v40.tsv");
          std::ifstream ids(path.parent_path()/"physical-v26.tsv");
          std::string id,hash;
-@@ -153,16 +159,18 @@ public:
+@@ -153,16 +160,18 @@ public:
      }
      std::optional<double> hardEstimate(const std::string& hash,int mode=7) const {
          if(auto entry=finalEntry(hash,mode))return entry->hard;
@@ -105,7 +119,7 @@ index 93d9299..aaf5596 100644
          if (auto ref=lookup(baseline,hash,mode)) return ref->traits;
          return {};
      }
-@@ -198,7 +206,7 @@ public:
+@@ -198,7 +207,7 @@ public:
          const auto existing=find(hash,mode);
          const bool missingStats=needStats && !selectionStats(hash,mode);
          if (existing && !missingStats && (!needPoor || poorExtra(hash,mode).has_value())) return existing;
@@ -114,7 +128,7 @@ index 93d9299..aaf5596 100644
          try {
              auto path=std::filesystem::u8path(file);
              if (!std::filesystem::exists(path)) path=std::filesystem::path(file);
-@@ -227,10 +235,14 @@ public:
+@@ -227,10 +236,14 @@ public:
                  result.hard=hard;
                  // Preserve the game's existing LOW.REC / END SPIKE indicators.
                  auto match=physicalIndex.find(physicalId(decoded));
@@ -131,7 +145,7 @@ index 93d9299..aaf5596 100644
              } else if(auto ref=lookup(baseline,hash,mode)) {
                  result=*ref;
              } else {
-@@ -238,13 +250,14 @@ public:
+@@ -238,13 +251,14 @@ public:
                  auto measured=analyze(std::move(decoded.notes),decoded.changes,layout.perSide,layout.sides,layout.scratches,decoded.total);
                  result={measured.scores,measured.passage.traits};
              }
@@ -147,7 +161,7 @@ index 93d9299..aaf5596 100644
                      sqlite3_bind_text(put.get(),1,hash.c_str(),-1,SQLITE_TRANSIENT);
                      sqlite3_bind_int(put.get(),2,mode);
                      for (int i=0;i<Count;++i) sqlite3_bind_int64(put.get(),3+i,displayCents(value[i]));
-@@ -255,7 +268,7 @@ public:
+@@ -255,7 +269,7 @@ public:
                  } catch(const std::exception&) { /* The in-memory result remains available. */ }
              }
              return value;
@@ -263,10 +277,10 @@ index 3090c5c..0525403 100644
              sprite({Panel::center.x+dx,Panel::center.y+dy},l.u,l.v,l.w,l.h,player?1:0);
 diff --git a/LR2/chart_radar/tech.hpp b/LR2/chart_radar/tech.hpp
 new file mode 100644
-index 0000000..06781f9
+index 0000000..2472bb4
 --- /dev/null
 +++ b/LR2/chart_radar/tech.hpp
-@@ -0,0 +1,84 @@
+@@ -0,0 +1,85 @@
 +#pragma once
 +#include "radar.hpp"
 +#include <bitset>
@@ -346,50 +360,92 @@ index 0000000..06781f9
 +    if(m.dose<=0.)return;
 +    const auto msd=minaTechnical(notes);
 +    const double evidence=1.-std::exp(-m.dose/3.);
-+    scores[Tech]=msd ? 21.*(*msd)*evidence : 170.*std::log1p(m.dose);
++    const double physical=235.*std::log1p(m.dose);
++    scores[Tech]=std::hypot(physical,msd ? 15.*(*msd)*evidence : 0.);
 +    scores[Jack]*=1.-.52*m.jackShare;
 +    scores[Chord]*=1.-.52*m.chordShare;
 +}
 +}
 diff --git a/LR2/chart_radar/tech_mina.cpp b/LR2/chart_radar/tech_mina.cpp
 new file mode 100644
-index 0000000..cbed29e
+index 0000000..7c40407
 --- /dev/null
 +++ b/LR2/chart_radar/tech_mina.cpp
-@@ -0,0 +1,34 @@
+@@ -0,0 +1,41 @@
 +#include "tech.hpp"
-+#include <mutex>
 +#include "../../dep/Etterna/MinaCalc/MinaCalc.h"
++#include <mutex>
 +
 +namespace chart_radar::tech {
-+std::optional<double> minaTechnical(const std::vector<Note>& sortedHeads) {
++namespace {
++std::optional<double> technicalForKeys(const std::vector<Note>& notes,int first,int keys,Calc& calc) {
 +    std::vector<NoteInfo> rows;
-+    double origin = 0.;
-+    for (const auto& head : sortedHeads) {
-+        if (head.lane < 0 || head.lane >= 7) continue;
-+        if (rows.empty()) origin = head.start;
-+        const double seconds = head.start - origin + .5;
-+        if (!std::isfinite(seconds) || seconds < 0. || seconds >= (max_intervals-2)*.5)
-+            return {};
-+        const float time = static_cast<float>(seconds);
-+        const unsigned mask = 1U << head.lane;
-+        if (!rows.empty() && rows.back().rowTime == time)
-+            rows.back().notes |= mask;
-+        else
-+            rows.push_back({mask,time});
++    double origin=0.;
++    for(const auto& head:notes) {
++        if(head.lane<first || head.lane>=first+keys)continue;
++        if(rows.empty())origin=head.start;
++        const double seconds=head.start-origin+.5;
++        if(!std::isfinite(seconds) || seconds<0. || seconds>=(max_intervals-2)*.5)return {};
++        const float t=static_cast<float>(seconds);
++        const unsigned bit=1u<<(head.lane-first);
++        if(!rows.empty() && rows.back().rowTime==t)rows.back().notes|=bit;
++        else rows.push_back({bit,t});
 +    }
-+    if (rows.size() < 2) return {};
-+    static std::mutex calcMutex;
-+    std::lock_guard<std::mutex> lock(calcMutex);
-+    static Calc calc;
-+    calc.ssr = false;
-+    calc.keycount = 7;
-+    const auto skills = calc.CalcMain(rows,1.F,.93F);
-+    if (skills.size() != NUM_Skillset || skills[Skill_Overall] <= 0.F ||
-+        !std::all_of(skills.begin(),skills.end(),[](float v){ return std::isfinite(v) && v >= 0.F; }))
-+        return {};
++    if(rows.size()<4)return {};
++    calc.ssr=false;calc.keycount=keys;
++    const auto skills=calc.CalcMain(rows,1.F,.93F);
++    if(skills.size()!=NUM_Skillset || skills[Skill_Overall]<=0.F ||
++       !std::isfinite(skills[Skill_Technical]) || skills[Skill_Technical]<0.F)return {};
 +    return skills[Skill_Technical];
 +}
++}
++// The seven-key handler and the two overlapping four-lane views see the
++// middle key; take a maximum to avoid charging its notes twice.
++std::optional<double> minaTechnical(const std::vector<Note>& notes) {
++    static std::mutex mutex;
++    std::lock_guard<std::mutex> lock(mutex);
++    static Calc seven,four;
++    auto result=technicalForKeys(notes,0,7,seven);
++    for(int first:{0,3}) {
++        const auto hand=technicalForKeys(notes,first,4,four);
++        if(hand && (!result || *hand>*result))result=hand;
++    }
++    return result;
++}
++}
+diff --git a/LR2/chart_radar/tests/chart_batch.cpp b/LR2/chart_radar/tests/chart_batch.cpp
+new file mode 100644
+index 0000000..a2d3064
+--- /dev/null
++++ b/LR2/chart_radar/tests/chart_batch.cpp
+@@ -0,0 +1,28 @@
++#include "catalog.hpp"
++#include <fstream>
++#include <iomanip>
++#include <iostream>
++using namespace chart_radar;
++int main(int argc,char** argv) {
++    if(argc!=4)return 1;
++    const std::filesystem::path assets=argv[1],charts=argv[2];
++    ChartCatalog catalog((assets/"charts-v26.tsv").string());
++    std::ofstream out(argv[3]);out<<std::fixed<<std::setprecision(2);
++    size_t used=0,missing=0;
++    std::vector<std::filesystem::path> paths;
++    for(const auto& entry:std::filesystem::directory_iterator(charts))paths.push_back(entry.path());
++    std::sort(paths.begin(),paths.end());
++    for(const auto& file:paths) {
++        const std::string hash=file.stem().string();
++        const auto scores=catalog.resolve(hash,file.string(),7,true);
++        const auto traits=catalog.traits(hash,7);const auto hard=catalog.hardEstimate(hash,7);
++        const auto poor=catalog.poorExtra(hash,7);
++        if(!scores || !traits || !poor || !hard){++missing;continue;}
++        out<<hash;
++        for(auto a:detailOrder)out<<'\t'<<(*scores)[a];
++        out<<'\t'<<int(traits->endSpike)<<'\t'<<traits->recoveryShortfall<<'\t'<<*poor<<'\t'<<*hard<<'\n';
++        ++used;
++    }
++    std::cout<<"Measured "<<used<<" source charts, unsupported "<<missing<<"\n";
++    return used && out.good()?0:2;
 +}
 diff --git a/LR2/chart_radar/tests/native_smoke.cpp b/LR2/chart_radar/tests/native_smoke.cpp
 index 621b11d..0be4975 100644
@@ -409,7 +465,7 @@ index 621b11d..0be4975 100644
      if (detailBand(899.99)!=Band::Standard || detailBand(900.)!=Band::Red ||
          detailBand(999.99)!=Band::Red || detailBand(1000.)!=Band::Monochrome ||
 diff --git a/LR2/chart_radar/tests/select_render.cpp b/LR2/chart_radar/tests/select_render.cpp
-index bd1823e..72e93f9 100644
+index bd1823e..974cd41 100644
 --- a/LR2/chart_radar/tests/select_render.cpp
 +++ b/LR2/chart_radar/tests/select_render.cpp
 @@ -57,15 +57,22 @@ int main(int argc,char** argv) {
@@ -429,7 +485,7 @@ index bd1823e..72e93f9 100644
 -    if(radarSample(0.)!=radarSample(4200.))return 8;
 +    if(radarSample(0.)==radarSample(4200.))return 8;
 +    for(bool player : {false,true}) {
-+        Scores sample{}; sample[Density]=360.;sample[Tech]=600.; sample[Jack]=220.; sample[Chord]=190.;
++        Scores sample{}; sample[Density]=360.;sample[Tech]=600.; sample[Jack]=220.; sample[chart_radar::Chord]=190.;
 +        DrawBox(0,0,1920,1080,GetColor(18,21,25),TRUE);
 +        drawPanel(canvas,sample,player,340.,1.);
 +        const auto shot=(out/(backend+(player?"-v43-player.png":"-v43-song.png"))).string();
