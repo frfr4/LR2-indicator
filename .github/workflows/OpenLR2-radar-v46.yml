@@ -225,7 +225,7 @@ jobs:
         run: |
           python radar-payload/v46/install.py .
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          if ((Get-FileHash radar-payload/v46/data.zip -Algorithm SHA256).Hash.ToLower() -ne "eb2448deb36b620c19a84763242fd20f6b73ab91dbdc5edf51e5b9e6b5b08c41") { throw "v46 data checksum" }
+          if ((Get-FileHash radar-payload/v46/data.zip -Algorithm SHA256).Hash.ToLower() -ne "2e24e721f3b1be64001fecf15611f39c5f5601c0b8ab0c4055b4ce256e552f52") { throw "v46 data checksum" }
           Expand-Archive radar-payload/v46/data.zip v46-data
       - name: Configure
         run: cmake --preset windows-vs-x64

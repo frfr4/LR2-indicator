@@ -21,7 +21,7 @@ for i in range(5):
   if i==j:continue
   key=tuple(sorted((i,j)));inside=(fold==i)|(fold==j);other=fold[inside]==j
   candidates[:,fold==j]=opts[key][:,other];src[fold==j]=base[key][other]
- rule=t.select(candidates,src,tr);tools=t.tools_for(tr);out=t.gather(t.estimates(tools),rule)
+ rule=t.select(candidates,src,tr);tools=t.tools_for(tr);out=t.retain_hand_evidence(t.gather(t.estimates(tools),rule),tools)
  pred[~tr]=out[~tr];prev[~tr]=tools[0][~tr]
  for name,x in [('v45',tools[0]),('v46',out)]:
   raw=t.cube(x) if name=='v45' else t.fit_compound(x,tr)[0]

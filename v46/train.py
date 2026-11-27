@@ -26,9 +26,15 @@ def tools_for(train,vals=None):
  for j in range(8):
   low.append(fit_axis(j,train,Q[0]));typical.append(fit_axis(j,train,Q[1]))
   v=old[train&(dose[:,j]>1.e-7),j];threshold.append(float(v.max()))
- return old,low,typical,np.array(threshold),float(scl)
+ # Preserve direct same-hand pattern evidence when generic passage calibration is sparse.
+ # Use only the technical signal and training-family HARD references.
+ tech=A.index('TECH');strong=train&ok&clean&(old[:,tech]>0)
+ strong &= old[:,tech]>=np.quantile(old[strong,tech],.75)
+ ratio=pd.Series(h[strong]/old[strong,tech]).groupby(d.family.to_numpy()[strong]).median()
+ direct_weight=float(np.clip(ratio.quantile(.025),0.,1.))
+ return old,low,typical,np.array(threshold),float(scl),direct_weight
 def estimates(tool):
- old,lower,mid,threshold,scl=tool
+ old,lower,mid,threshold,scl=tool[:5]
  low=np.column_stack([envelope(j,x) for j,x in enumerate(lower)]);central=np.column_stack([envelope(j,x) for j,x in enumerate(mid)])
  extension=.65*np.maximum(0.,old-threshold)
  candidates=np.empty((len(choices),len(d),8))
@@ -85,12 +91,16 @@ def curve(v,train):
  xp=np.r_[0,u];yp=np.r_[0,y];rate=(yp[-1]-yp[-4])/(xp[-1]-xp[-4]);return np.r_[xp,xp[-1]+1000],np.r_[yp,yp[-1]+1000*rate]
 def gather(options,policy):
  return options[policy,np.arange(len(d))[:,None],np.arange(8)]
+def retain_hand_evidence(points,tool):
+ tech=A.index('TECH')
+ points[:,tech]=np.maximum(points[:,tech],np.round(tool[5]*tool[0][:,tech],2))
+ return points
 def run():
  N=len(d);everything=np.full(N,True)
  blocks={};outer={};og=np.empty_like(oldfold);outer_candidates=np.empty((len(choices),N,8));pred=np.empty_like(og);phys=np.empty(N)
  for i in range(5):
   tr=fold!=i;tool=tools_for(tr);arr=estimates(tool)
-  outer[i]=(arr,tool[0]);outer_candidates[:,~tr]=arr[:,~tr];og[~tr]=tool[0][~tr]
+  outer[i]=(arr,tool);outer_candidates[:,~tr]=arr[:,~tr];og[~tr]=tool[0][~tr]
  assert np.max(abs(og-oldfold))<.011
  for i in range(5):
   for j in range(i+1,5):
@@ -101,10 +111,10 @@ def run():
    if i==j:continue
    z,o,ids=blocks[tuple(sorted((i,j)))];mask=fold[ids]==j;nested[:,ids[mask]]=z[:,mask];earlier[ids[mask]]=o[mask]
   pol=select(nested,earlier,tr)
-  arr,old=outer[i];v=gather(arr,pol);pred[~tr]=v[~tr]
+  arr,tool=outer[i];v=retain_hand_evidence(gather(arr,pol),tool);pred[~tr]=v[~tr]
   joint,_=fit_compound(v,tr);xp,yp=curve(joint[:,None],tr);phys[~tr]=b.eval_curve(joint[~tr],xp,yp)
   print('outer',i,pol,flush=True)
- pol=select(outer_candidates,og,everything);tool=tools_for(everything,old_release);final=gather(estimates(tool),pol);joint,joint_weights=fit_compound(final,everything);xp,yp=curve(joint[:,None],everything)
+ pol=select(outer_candidates,og,everything);tool=tools_for(everything,old_release);final=retain_hand_evidence(gather(estimates(tool),pol),tool);joint,joint_weights=fit_compound(final,everything);xp,yp=curve(joint[:,None],everything)
  assert np.isfinite(final).all() and np.min(final)>=0 and len(xp)<=18
  np.savez(P/'outputs.npz',points=final,heldout=pred,heldout_physical=phys,physical=b.eval_curve(joint,xp,yp))
  def vec(x):return '{'+','.join(format(float(a),'.16g') for a in x)+'}'
@@ -113,7 +123,7 @@ def run():
   lines+=['inline constexpr Envelope '+name+'[]={']
   for scale,co in models:lines.append('{'+str(len(scale))+','+vec(scale)+','+vec(co)+'},')
   lines+=['};']
- lines+=['inline constexpr double jointWeights[]='+vec(joint_weights)+';','inline constexpr double policy[][3]={'+','.join(vec(choices[k]) for k in pol)+'};','inline constexpr double tailStart[]='+vec(tool[3])+';','inline constexpr double visualScale='+str(tool[4])+';','inline constexpr v44::parameters::Curve overallCurve={'+str(len(xp))+','+vec(xp)+','+vec(yp)+'};','}']
+ lines+=['inline constexpr double directTechWeight='+str(tool[5])+';','inline constexpr double jointWeights[]='+vec(joint_weights)+';','inline constexpr double policy[][3]={'+','.join(vec(choices[k]) for k in pol)+'};','inline constexpr double tailStart[]='+vec(tool[3])+';','inline constexpr double visualScale='+str(tool[4])+';','inline constexpr v44::parameters::Curve overallCurve={'+str(len(xp))+','+vec(xp)+','+vec(yp)+'};','}']
  (P/'cal46.hpp').write_text('\n'.join(lines)+'\n')
  print('policy',choices[pol].tolist(),'scale',tool[4],flush=True);show(pred)
  print('SOF former31',[(v[d.calibration_group,3]-h[d.calibration_group]>200).sum() for v in [og,pred]])

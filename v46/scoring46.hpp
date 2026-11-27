@@ -49,6 +49,7 @@ inline double corrected(const v44::Sections& m,int a,double original){
     const double intrinsic=original+std::min(rule[0]*original,rule[0]*300.);
     const double limit=std::min(middle,low+rule[1]+rule[2]*std::max(0.,middle-650.));
     const double adjusted=std::min(intrinsic,limit+tail);
+    if(a==Tech)return std::max(adjusted,directTechWeight*original);
     return a==Density?.75*original+.25*adjusted:adjusted;
 }
 }
