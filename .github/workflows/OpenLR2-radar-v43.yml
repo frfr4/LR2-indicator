@@ -159,12 +159,6 @@ jobs:
           shutil.copytree('v41-source/LR2', 'LR2', dirs_exist_ok=True)
           with open('CMakeLists.txt','a',encoding='utf8') as f:
               f.write('\nadd_executable(OpenLR2V41Selection EXCLUDE_FROM_ALL LR2/chart_radar/tests/v41_selection.cpp)\ntarget_compile_features(OpenLR2V41Selection PRIVATE cxx_std_17)\ntarget_compile_definitions(OpenLR2V41Selection PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)\ntarget_include_directories(OpenLR2V41Selection PRIVATE LR2/chart_radar)\ntarget_link_libraries(OpenLR2V41Selection PRIVATE SQLite)\n')
-      - uses: actions/download-artifact@v4
-        with:
-          github-token: ${{ github.token }}
-          run-id: 45978779587
-          name: OpenLR2_v42_Calibration
-          path: radar-payload/v42
       - name: Install the v42 selection catalog
         shell: pwsh
         run: |
