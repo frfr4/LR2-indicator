@@ -1,0 +1,242 @@
+--- a/LR2/chart_radar/sections.hpp
++++ b/LR2/chart_radar/sections.hpp
+@@ -8,6 +8,7 @@
+ #include "scratch47.hpp"
+ #include "delay47.hpp"
+ #include "gauge47.hpp"
++#include "pressure.hpp"
+ 
+ namespace chart_radar::v44 {
+ struct Sections {
+@@ -15,6 +16,8 @@
+     v46::LocalAxes local{};
+     v47::HumanFeatures human{};
+     v50::Load pattern{};
++    v52::Spectra pressure{};
++    int judgeRank=2;
+     std::array<double,10> mini{};
+     v47::Scratch47 scratch{};
+     std::array<double,10> stagger{};
+@@ -126,6 +129,7 @@
+ 
+ inline Sections measure(const DecodedChart& chart,const RadarTempo& timing) {
+     Sections out;
++    out.judgeRank=chart.judgeRank;
+     if(chart.notes.empty())return out;
+     const double origin=chart.notes.front().start;
+     const double span=chart.notes.back().start-origin;
+@@ -226,6 +230,7 @@
+     out.scrollReading=v45::measureReading(chart,frames,&scrollLoads);
+     out.local=v46::passages(events,scrollLoads,frames);
+     out.human=v47::humanMechanics(frames,scrollLoads);
++    out.pressure=v52::pressure(frames);
+     out.pattern=v50::measure(frames);
+     out.mini=v47::miniJacks(frames);
+     out.scratch=v47::scratchActions(chart.notes,frames);
+--- a/LR2/chart_radar/axis47.hpp
++++ b/LR2/chart_radar/axis47.hpp
+@@ -11,6 +11,7 @@
+ #include "params.hpp"
+ #include "scale45.hpp"
+ #include "scoring46.hpp"
++#include "scale52.hpp"
+ 
+ namespace chart_radar::v47 {
+ 
+@@ -115,10 +116,7 @@
+     return measured;
+ }
+ 
+-inline Scores axisScores(const HumanFeatures& motor,const v44::Sections& sections,
+-                         const Scratch47& scratch,const std::array<double,10>& stagger) {
+-    const auto physical=physicalAxes(motor,sections,scratch,stagger);
+-    const auto raw=patternAxes(sections,physical);
++inline Scores patternShape(const v44::Sections& sections,const Scores& physical,const Scores& raw) {
+     const auto prior=v50::calibratePeak(raw,physical);
+     auto output=prior;
+     const double peak=*std::max_element(raw.begin(),raw.end());
+@@ -148,6 +146,16 @@
+     return output;
+ }
+ 
++inline Scores axisScores(const HumanFeatures& motor,const v44::Sections& sections,
++                         const Scratch47& scratch,const std::array<double,10>& stagger) {
++    const auto physical=physicalAxes(motor,sections,scratch,stagger);
++    const auto raw=patternAxes(sections,physical);
++    const auto shape=patternShape(sections,physical,raw);
++    const double load=v52::physicalLoad(sections,physical,raw);
++    const double peak=v52::peakFromInputs(v52::physicalInputs(sections,physical,raw),v52::gaugeInputs(sections),load,sections.duration,sections.heads);
++    return v52::project(shape,peak);
++}
++
+ inline double physicalRating(const Scores& scores) {
+     std::array<double,2*Count+1> x{};
+     std::copy(scores.begin(),scores.end(),x.begin());
+--- a/LR2/chart_radar/catalog.hpp
++++ b/LR2/chart_radar/catalog.hpp
+@@ -25,8 +25,6 @@
+     struct Entry { Scores scores; ChartTraits traits; std::optional<double> hard{}; };
+     using Entries = std::unordered_map<std::string,Entry>;
+     Entries entries, baseline, legacy;
+-    v40::Grades grades;
+-    v42::ClearCatalog clearCatalog;
+     using PoorMap = std::unordered_map<std::string,int>;
+     PoorMap poor;
+     std::unordered_map<std::string,v41::SelectionStats> statistics;
+@@ -36,12 +34,11 @@
+         return mode==7 ? hash : hash+"#"+std::to_string(mode);
+     }
+     std::unordered_map<std::string,int> gaugeKinds;
+-    std::unordered_map<std::string,double> combinedRatings;
+     void readSummaries(const std::filesystem::path& path) {
+         std::ifstream f(path);std::string id;v41::SelectionStats row;double easy,hard,rating;int flags;
+         while(f>>id>>row.average>>row.maximum>>easy>>hard>>flags>>rating) {
+             if(flags&8)row.easy.reset();else row.easy=easy;
+-            row.hard=hard;statistics.emplace(id,row);gaugeKinds.emplace(id,flags);combinedRatings.emplace(id,rating);
++            row.hard=hard;statistics.emplace(id,row);gaugeKinds.emplace(id,flags);
+         }
+     }
+     void openCache(const std::string& path) {
+@@ -51,10 +48,10 @@
+         if (status!=SQLITE_OK) {cache.reset();return;}
+         sqlite3_busy_timeout(ptr,350);
+         sqlite3_exec(ptr,"PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL",nullptr,nullptr,nullptr);
+-        if (sqlite3_exec(ptr,"CREATE TABLE IF NOT EXISTS radar_v51_chart (hash TEXT,mode INTEGER,"
++        if (sqlite3_exec(ptr,"CREATE TABLE IF NOT EXISTS radar_v52_chart (hash TEXT,mode INTEGER,"
+                 "a INTEGER,b INTEGER,c INTEGER,d INTEGER,e INTEGER,f INTEGER,g INTEGER,h INTEGER,"
+                 "end_spike INTEGER,shortfall INTEGER,hard REAL,PRIMARY KEY(hash,mode))",nullptr,nullptr,nullptr)!=SQLITE_OK) {cache.reset();return;}
+-        readCache(ptr,"SELECT * FROM radar_v51_chart",entries);
++        readCache(ptr,"SELECT * FROM radar_v52_chart",entries);
+         if (sqlite3_exec(ptr,"CREATE TABLE IF NOT EXISTS radar_hard_poor_v1 "
+                 "(hash TEXT,mode INTEGER,cents INTEGER,PRIMARY KEY(hash,mode))",nullptr,nullptr,nullptr)==SQLITE_OK) {
+             auto q=query(ptr,"SELECT hash,mode,cents FROM radar_hard_poor_v1");
+@@ -171,14 +168,12 @@
+         return lookup(entries,hash,mode);
+     }
+ public:
+-    explicit ChartCatalog(const std::string& file,const std::string& cachePath={})
+-        : clearCatalog(std::filesystem::u8path(file).parent_path()/"clear-v43.tsv") {
++    explicit ChartCatalog(const std::string& file,const std::string& cachePath={}) {
+         const auto path=std::filesystem::u8path(file);
+         readTable(path,baseline);
+         readTable(path.parent_path()/"charts-v40.tsv",legacy,&poor);
+-        readTable(path.parent_path()/"charts-v51.tsv",entries,&poor,false);
++        readTable(path.parent_path()/"charts-v52.tsv",entries,&poor,false);
+         readSummaries(path.parent_path()/"selection-v47.tsv");
+-        grades.load(path.parent_path()/"tiers-v40.tsv");
+         std::ifstream ids(path.parent_path()/"physical-v26.tsv");
+         std::string id,hash;
+         while (ids>>id>>hash) physicalIndex.emplace(id,hash);
+@@ -187,8 +182,8 @@
+         }
+     }
+     double patternRating(const std::string& hash,int mode) const {
+-        std::lock_guard<std::mutex> lock(mutex);auto it=combinedRatings.find(hash);
+-        return mode==7 && it!=combinedRatings.end()?it->second:0.;
++        if(mode==7)if(const auto entry=finalEntry(hash,mode))return v44::compound(entry->scores);
++        return 0.;
+     }
+     int gaugeFlags(const std::string& hash,int mode) const {
+         std::lock_guard<std::mutex> lock(mutex);
+@@ -201,7 +196,7 @@
+     }
+     std::optional<double> hardEstimate(const std::string& hash,int mode=7) const {
+         if(auto entry=finalEntry(hash,mode))return entry->hard;
+-        if(auto row=lookup(legacy,hash,mode))return row->hard;
++        if(mode!=7)if(auto row=lookup(legacy,hash,mode))return row->hard;
+         return {};
+     }
+     std::optional<Scores> fallback(const std::string& hash,int mode=7) const {
+@@ -228,11 +223,11 @@
+         auto it=statistics.find(key(hash,mode));
+         if(it!=statistics.end()) {
+             auto row=it->second;
+-            clearCatalog.apply(hash,mode,row);
+-            const auto flags=gaugeKinds.find(hash);
+-            if(mode==7 && flags!=gaugeKinds.end() && (flags->second&8)){
+-                const auto* known=clearCatalog.find(hash,mode);
+-                if(!known || !known->referenceEasy)row.easy.reset();
++            if(mode==7) {
++                const auto entry=lookup(entries,hash,mode);
++                if(entry && entry->hard)row.hard=entry->hard;
++                const auto flags=gaugeKinds.find(hash);
++                if(flags!=gaugeKinds.end() && (flags->second&8))row.easy.reset();
+             }
+             return row;
+         }
+@@ -310,7 +305,7 @@
+             std::lock_guard<std::mutex> lock(mutex);
+             if (entries.emplace(key(hash,mode),result).second && cache) {
+                 try {
+-                    auto put=query(cache.get(),"INSERT OR REPLACE INTO radar_v51_chart VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)");
++                    auto put=query(cache.get(),"INSERT OR REPLACE INTO radar_v52_chart VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)");
+                     sqlite3_bind_text(put.get(),1,hash.c_str(),-1,SQLITE_TRANSIENT);
+                     sqlite3_bind_int(put.get(),2,mode);
+                     for (int i=0;i<Count;++i) sqlite3_bind_int64(put.get(),3+i,displayCents(value[i]));
+--- a/LR2/chart_radar/tests/separation_check.cpp
++++ b/LR2/chart_radar/tests/separation_check.cpp
+@@ -22,11 +22,12 @@
+     const auto physical=v47::physicalAxes(sections.human,sections,sections.scratch,sections.stagger);
+     const auto signal=v47::patternAxes(sections,physical);
+     const auto published=v44::scores(sections);
+-    const auto baseline=v50::calibratePeak(signal,physical);
+-    for (int i=0;i<Count;++i) {
+-        if (i!=Density && i!=Jack && i!=chart_radar::Chord && std::abs(published[i]-baseline[i])>.011)
+-            throw std::runtime_error("independent timing, turntable and duration scores");
+-    }
++    const auto shape=v47::patternShape(sections,physical,signal);
++    const double top=*std::max_element(published.begin(),published.end());
++    const auto expected=v52::project(shape,top);
++    for (int i=0;i<Count;++i)
++        if(std::abs(published[i]-expected[i])>.011 || (shape[i]==0. && published[i]!=0.))
++            throw std::runtime_error("native geometry diverged from measured pattern");
+     auto score=raw ? signal : published;
+     for(double v:score)if(!std::isfinite(v)||v<0)throw std::runtime_error("invalid score");
+     return score;
+--- a/LR2/chart_radar/tests/v47_runtime_check.cpp
++++ b/LR2/chart_radar/tests/v47_runtime_check.cpp
+@@ -52,16 +52,16 @@
+         sqlite3* raw=nullptr;
+         check(sqlite3_open(dbFile.string().c_str(),&raw)==SQLITE_OK,"open cache");
+         Database db(raw,sqlite3_close);
+-        command(raw,"CREATE TABLE IF NOT EXISTS radar_v50_chart(hash TEXT,mode INTEGER,a INTEGER,b INTEGER,c INTEGER,d INTEGER,e INTEGER,f INTEGER,g INTEGER,h INTEGER,end_spike INTEGER,shortfall INTEGER,hard REAL,PRIMARY KEY(hash,mode))");
++        command(raw,"CREATE TABLE IF NOT EXISTS radar_v51_chart(hash TEXT,mode INTEGER,a INTEGER,b INTEGER,c INTEGER,d INTEGER,e INTEGER,f INTEGER,g INTEGER,h INTEGER,end_spike INTEGER,shortfall INTEGER,hard REAL,PRIMARY KEY(hash,mode))");
+         command(raw,"CREATE TABLE IF NOT EXISTS selection_stats_v44(hash TEXT,mode INTEGER,average REAL,maximum REAL,easy REAL,hard REAL,PRIMARY KEY(hash,mode))");
+-        command(raw,"INSERT OR REPLACE INTO radar_v50_chart VALUES('dddddddddddddddddddddddddddddddd',7,1,2,3,4,5,6,7,8,0,4,5.1),('dddddddddddddddddddddddddddddddd',5,1,2,3,4,5,0,7,8,0,4,NULL)");
++        command(raw,"INSERT OR REPLACE INTO radar_v51_chart VALUES('dddddddddddddddddddddddddddddddd',7,1,2,3,4,5,6,7,8,0,4,5.1),('dddddddddddddddddddddddddddddddd',5,1,2,3,4,5,0,7,8,0,4,NULL)");
+         command(raw,"INSERT OR REPLACE INTO selection_stats_v44 VALUES('dddddddddddddddddddddddddddddddd',7,777,778,9,10),('dddddddddddddddddddddddddddddddd',5,77,78,NULL,NULL)");
+     }
+     {
+         ChartCatalog cat(catalogPath.string(),dbFile.string());
+         check(!cat.find(cached,7) && !cat.selectionStats(cached,7),"stale seven-key cache");
+         check(cat.find(cached,5).has_value() && cat.selectionStats(cached,5)->average==77.,"non-seven-key cache migration");
+-        check(cat.selectionStats(overridden,7)->easy.value()==-1.02,"observed EASY overrides impossible marker");
++        check(!cat.selectionStats(overridden,7)->easy,"chart-only estimate respects impossible gauge");
+         check(cat.selectionStats(regular,7)->easy.value()==-1.00,"legitimate value equal to handoff sentinel survives");
+         const auto result=cat.resolve(hidden,chart.string(),7,true,true);check(result.has_value(),"local resolve");
+         const auto stats=cat.selectionStats(hidden,7);
+@@ -71,8 +71,8 @@
+         const auto local=v44::measure(parsed,timing);
+         check(local.gaugePath[gauge47::EasyPerfectEnd]>27.19 && local.gaugePath[gauge47::EasyPerfectEnd]<27.21,"fractional TOTAL truncation");
+         check(local.gaugeFlags==cat.gaugeFlags(hidden,7),"identical local and cached flags");
+-        check(cat.hardEstimate(hidden,7)==v44::chartLamps(local,parsed.judgeRank).hard && stats->hard.value()==16.,
+-              "chart-only HARD and public lamp estimate have distinct accessors");
++        check(cat.hardEstimate(hidden,7)==v44::chartLamps(local,parsed.judgeRank).hard && stats->hard==cat.hardEstimate(hidden,7),
++              "the selection screen shows the native BMS estimate");
+         check(v44::scores(local)==*result && v44::chartLamps(local,parsed.judgeRank).easy==-1.,"native chart and cache agree");
+         check(cat.traits(hidden,7)->recoveryShortfall==assessPassages(parsed.notes,7,parsed.total).traits.recoveryShortfall,"LOW REC units");
+     }
+--- a/LR2/chart_radar/model44.hpp
++++ b/LR2/chart_radar/model44.hpp
+@@ -41,6 +41,10 @@
+ struct Lamps {double easy,hard;};
+ inline Lamps chartLamps(const Sections& m,int rank) {
+     const auto lamps=v47::chartLamps47(m,rank);
+-    return {(m.gaugeFlags&8)?-1.:lamps[0],lamps[1]};
++    const double easy=(m.gaugeFlags&8)?-1.:lamps[0];
++    const auto physical=v47::physicalAxes(m.human,m,m.scratch,m.stagger);
++    const auto raw=v47::patternAxes(m,physical);
++    return {easy,v52::hardFromInputs(v52::physicalInputs(m,physical,raw),v52::gaugeInputs(m),
++                                     m.duration,m.heads,easy,lamps[1])};
+ }
+ }
