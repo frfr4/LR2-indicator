@@ -1,0 +1,49 @@
+name: Measure v49 chord and jack inputs
+on:
+  push:
+    branches: [radar-v49-wmix]
+    paths: ['.github/workflows/OpenLR2-v49-measure.yml', 'v49/grip49.hpp', 'v49/scan.py', 'v49/measure.cpp']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: darksabun/darksabun.github.io
+          ref: 8e7f5e49207ee49326c0d3dc75a246506bffb48e
+          path: public-darksabun
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: TristanDavis97/Sabuns
+          ref: 2df4a9dd2fe8fd215c2c52da7de0ca8380c8f02f
+          path: public-sabuns
+          persist-credentials: false
+      - name: Restore source and measure input events
+        shell: python
+        run: |
+          import sys, subprocess, shutil, zipfile
+          from pathlib import Path
+          sys.path.insert(0,'v48')
+          from rebuild import restore_headers
+          root=Path.cwd()
+          tmp=root/'build-check'
+          tmp.mkdir()
+          headers=restore_headers(root,tmp)
+          shutil.copyfile('v49/grip49.hpp',headers/'grip49.hpp')
+          p=headers/'sections.hpp';text=p.read_text().replace('#include "mechanics47.hpp"','#include "grip49.hpp"').replace('v47::HumanFeatures human{};','v47::HumanFeatures human{}; v49::GripFeatures grips{};').replace('out.human=v47::humanMechanics(frames,scrollLoads);','out.human=v47::humanMechanics(frames,scrollLoads); out.grips=v49::measureGrips(frames);')
+          p.write_text(text)
+          subprocess.run(['python','v49/scan.py','charts','public-darksabun','public-sabuns'],check=True)
+          subprocess.run(['c++','-O2','-std=c++17','-I'+str(headers),'v49/measure.cpp','-o','measure'],check=True)
+          subprocess.run(['./measure','charts','features.tsv'],check=True)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v49-public-chart-features
+          path: features.tsv
+          retention-days: 7
