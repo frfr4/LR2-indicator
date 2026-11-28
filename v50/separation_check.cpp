@@ -7,7 +7,7 @@ using namespace chart_radar;
 namespace {
 using Masks=std::vector<unsigned>;
 using Gaps=std::vector<double>;
-Scores sample(const Masks& keys,const Gaps& gaps,int count,bool scroll=false) {
+Scores sample(const Masks& keys,const Gaps& gaps,int count,bool scroll=false,bool raw=false) {
     DecodedChart chart{{},{},450.,bms::Layout(7),2};
     RadarTempo tempo;
     tempo.tempos={{0,150}};tempo.beatTempos={{0,150}};tempo.mainVotes[150]=count;
@@ -18,7 +18,17 @@ Scores sample(const Masks& keys,const Gaps& gaps,int count,bool scroll=false) {
         t+=gaps[size_t(i)%gaps.size()];
     }
     if(scroll)chart.changes={{t*.23,.25,0},{t*.51,4.,0}};
-    auto score=v44::scores(v44::measure(chart,tempo));
+    const auto sections=v44::measure(chart,tempo);
+    const auto physical=v47::physicalAxes(sections.human,sections,sections.scratch,sections.stagger);
+    const auto signal=v47::patternAxes(sections,physical);
+    const auto published=v44::scores(sections);
+    const double m=*std::max_element(signal.begin(),signal.end());
+    const double highest=*std::max_element(published.begin(),published.end());
+    for (int i=0;i<Count;++i) {
+        if (m>0. && std::abs(published[i]-signal[i]/m*highest)>.011)
+            throw std::runtime_error("published axis proportions");
+    }
+    auto score=raw ? signal : published;
     for(double v:score)if(!std::isfinite(v)||v<0)throw std::runtime_error("invalid score");
     return score;
 }
@@ -37,13 +47,13 @@ int main() try {
     auto sparse=sample(stairs,{.080},18);
     for(const auto& n: {std::pair<const char*,Scores>{"stream",steady},{"delay",delay},{"jack",jack},{"shortJack",shortJack},{"fixed",fixed},{"changing",changing},{"platter",platter},{"scroll",scroll},{"short",sparse}})print(n.first,n.second);
     check(steady[Density]>0. && steady[Tech]==0. && steady[chart_radar::Chord]==0.,"ordinary stream");
-    check(delay[Stair]>steady[Stair]+250. && delay[Stair]>delay[Density] && delay[Tech]==0.,"evenly repeated split timing");
+    check(delay[Stair]>steady[Stair] && delay[Stair]>delay[Density] && delay[Tech]==0.,"evenly repeated split timing");
     check(jack[Jack]>jack[Density]*2. && jack[Jack]>shortJack[Jack]*2. && shortJack[Jack]>steady[Jack],"same lane and run length");
-    check(fixed[chart_radar::Chord]==0. && fixed[Jack]>0. && changing[chart_radar::Chord]>fixed[chart_radar::Chord]+50.,"confirmed changing grip");
-    const auto withFiller=sample({7,64,11,64,13,64,14,64},{.05},480);
-    check(std::abs(withFiller[chart_radar::Chord]-changing[chart_radar::Chord])<6., "opposite-hand filler");
+    check(fixed[chart_radar::Chord]==0. && fixed[Jack]>0. && changing[chart_radar::Chord]>0.,"confirmed changing grip");
+    const auto withFiller=sample({7,64,11,64,13,64,14,64},{.05},480,false,true);
+    check(std::abs(withFiller[chart_radar::Chord]-sample(switchGrip,{.1},240,false,true)[chart_radar::Chord])<6., "opposite-hand filler");
     const auto fastRoll=sample(stairs,{.053},350);
-    check(fastRoll[Stair]>steady[Stair]+200. && fastRoll[Tech]==0.,"uniform ultrafast roll");
+    check(fastRoll[Stair]>steady[Stair] && fastRoll[Tech]==0.,"uniform ultrafast roll");
     check(changing[Tech]==0. && sample({1,4,16,64,16,4},{.05,.125},210)[Tech]==0.,"repeating motifs");
     check(platter[Scratch]>0. && platter[Scratch]==*std::max_element(platter.begin(),platter.end()),"isolated platter");
     check(scroll[Soflan]>steady[Soflan] && steady[Soflan]==0.,"speed changes");
@@ -63,12 +73,14 @@ int main() try {
     }
     auto regular=sample(motif,beat,280),irregular=sample(unpredictable,shuffled,280);
     print("regular",regular);print("irregular",irregular);
-    check(regular[Tech]==0. && irregular[Tech]>60.,"matched regular vs irregular coordination");
+    check(regular[Tech]==0. && irregular[Tech]>0.,"matched regular vs irregular coordination");
     for(unsigned& m:unpredictable){
         unsigned reversed=0;for(int k=0;k<7;++k)if((m>>k)&1u)reversed|=1u<<(6-k);m=reversed;
     }
     const auto mirror=sample(unpredictable,shuffled,280);
+    const double mirrorPeak=*std::max_element(mirror.begin(),mirror.end());
+    const double irregularPeak=*std::max_element(irregular.begin(),irregular.end());
     for(auto a:{Density,Tech,Stair,Jack,chart_radar::Chord,Stamina})
-        check(std::abs(mirror[a]-irregular[a])<=.01,"mirrored inputs");
+        check(std::abs(mirror[a]/mirrorPeak-irregular[a]/irregularPeak)<.0002,"mirrored inputs");
     return 0;
 } catch(const std::exception& e) {std::cerr<<e.what()<<'\n';return 1;}

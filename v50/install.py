@@ -6,6 +6,7 @@ for dry in (['--check'],[]):
     subprocess.run(['git','apply',*dry,'--ignore-space-change',str(here/'native.patch')],check=True)
 src=Path('LR2/chart_radar')
 shutil.copyfile(here/'pattern50.hpp',src/'pattern50.hpp')
+shutil.copyfile(here/'peak_scale50.hpp',src/'peak_scale50.hpp')
 shutil.copyfile(here/'separation_check.cpp',src/'tests/separation_check.cpp')
 with Path('CMakeLists.txt').open('a',encoding='utf-8') as f:
     f.write('''

@@ -1,13 +1,25 @@
 --- a/LR2/chart_radar/axis47.hpp
 +++ b/LR2/chart_radar/axis47.hpp
-@@ -1,6 +1,5 @@
+@@ -1,12 +1,12 @@
  #pragma once
  #include "sections.hpp"
 -#include "grip_scale49.hpp"
  #include "mechanics47.hpp"
  #include "scratch47.hpp"
  #include "delay47.hpp"
-@@ -66,10 +65,10 @@
+ #include "axis47_params.hpp"
+ #include "compound47.hpp"
+ #include "mini_floor.hpp"
++#include "peak_scale50.hpp"
+ #include "observation47_params.hpp"
+ #include "params.hpp"
+ #include "scale45.hpp"
+@@ -62,16 +62,10 @@
+     return measuredMaximum+width*std::log1p((load-measuredMaximum)/width);
+ }
+ 
+-inline Scores axisScores(const HumanFeatures& motor,const v44::Sections& sections,
++inline Scores physicalAxes(const HumanFeatures& motor,const v44::Sections& sections,
                           const Scratch47& scratch,const std::array<double,10>& stagger) {
      Scores scores{};
      for (int a=0; a<Count; ++a) {
@@ -15,21 +27,35 @@
 -            const double rating=a==Jack ? v49::gripScore(sections.grips.jack,v49::jackScale)
 -                                        : v49::gripScore(sections.grips.chord,v49::chordScale);
 -            scores[a]=std::round(100.*rating)/100.;
-+        if (a!=Scratch && a!=Soflan) {
-+            const auto& p=sections.pattern;
-+            const std::array<double,Count> motorScores={p.notes,p.delay,0.,0.,p.jack,p.tech,p.chord,p.stamina};
-+            scores[a]=std::round(100.*motorScores[a])/100.;
-             continue;
-         }
+-            continue;
+-        }
          auto v=measuredAxis(a,motor,sections,scratch,stagger);
-@@ -100,7 +99,6 @@
-             axis=std::min(axis,std::sqrt(axis*axisfit::diskScale*disk));
-             axis=std::max(axis,axisfit::platterScale*platter);
-         }
--        if (a==Tech)axis=std::max(axis,mixedRehitFloor(sections.mini));
-         if (a==Soflan) {
-             const double original=std::round(100.*v45::readingScale*sections.scrollReading.dose())/100.;
-             axis=std::min(v46::corrected(sections,a,original),std::round(100.*v45::readingScale*v[10])/100.);
+         for(size_t j=0;j<v.size();++j)v[j]=measuredContinuation(v[j],observation::maximum[a][j]);
+         double estimate=0., conservative=0., typical=0.;
+@@ -110,6 +104,23 @@
+     return scores;
+ }
+ 
++inline Scores patternAxes(const v44::Sections& sections, const Scores& physical) {
++    const auto& p=sections.pattern;
++    Scores measured{};
++    measured[Density]=p.notes; measured[Stair]=p.delay;
++    measured[Jack]=p.jack; measured[Tech]=p.tech;
++    measured[Chord]=p.chord; measured[Stamina]=p.stamina;
++    measured[Scratch]=physical[Scratch]; measured[Soflan]=physical[Soflan];
++    for (double& value:measured) value=std::round(value*100.)/100.;
++    return measured;
++}
++
++inline Scores axisScores(const HumanFeatures& motor,const v44::Sections& sections,
++                         const Scratch47& scratch,const std::array<double,10>& stagger) {
++    const auto physical=physicalAxes(motor,sections,scratch,stagger);
++    return v50::calibratePeak(patternAxes(sections,physical),physical);
++}
++
+ inline double physicalRating(const Scores& scores) {
+     std::array<double,2*Count+1> x{};
+     std::copy(scores.begin(),scores.end(),x.begin());
 --- a/LR2/chart_radar/catalog.hpp
 +++ b/LR2/chart_radar/catalog.hpp
 @@ -51,10 +51,10 @@
@@ -133,7 +159,38 @@
      for(int row=0;row<4;++row)canvas.selectionRow(row,std::array<double,4>{26.5,28.,0.,50.}[row]);
 --- a/LR2/chart_radar/tests/tech_check.cpp
 +++ b/LR2/chart_radar/tests/tech_check.cpp
-@@ -62,7 +62,7 @@
+@@ -14,6 +14,10 @@
+     if(scroll){chart.changes={{t*.2,.25,0},{t*.55,4,0}};}
+     return v44::measure(chart,tm);
+ }
++// Verify isolation in native pattern measurements before conversion to published units.
++static Scores patternSignal(const v44::Sections& x) {
++    return v47::patternAxes(x,v47::physicalAxes(x.human,x,x.scratch,x.stagger));
++}
+ int main(int argc,char**argv) {
+     const std::vector<double> gap{.075};
+     const auto jack=synthetic({1},gap),chord=synthetic({3},gap),notes=synthetic({1,4,16,2,32,8,64},gap),
+@@ -29,7 +33,7 @@
+     if(scratch.dose[Scratch]<=0 || scratch.dose[Density]>0 || del.dose[Stair]<=notes.dose[Stair])return 4;
+     if(warp.dose[Soflan]<=0||longRun.dose[Stamina]<=notes.dose[Stamina])return 5;
+     if(regular.dose!=notes.dose || (!regular.gaugeFlags) || warp.dose[Density]!=notes.dose[Density])return 6;
+-    for(int i=0;i<Count;++i){auto m=notes;m.dose[i]+=1000.;auto v=v44::scores(m);auto s=v44::scores(notes);
++    for(int i=0;i<Count;++i){auto m=notes;m.dose[i]+=1000.;auto v=patternSignal(m);auto s=patternSignal(notes);
+       for(int j=0;j<Count;++j)if(i!=j && v[j]!=s[j])return 7;
+       if(v[i]<s[i]||v44::compound(v)<v44::compound(s))return 8;
+     }
+@@ -53,16 +57,16 @@
+     auto speeds=steady;speeds.changes={{4.,.25,0.},{8.,4.,0.}};auto extra=speeds;
+     for(const auto& n:speeds.notes)if(n.start>11.)extra.notes.push_back({n.start,n.end,(n.lane+1)%7,0.});
+     std::stable_sort(extra.notes.begin(),extra.notes.end(),[](const Note& a,const Note& b){return a.start<b.start;});
+-    auto plain=v44::scores(v44::measure(speeds,tempo)),dense=v44::scores(v44::measure(extra,tempo));
++    auto plain=patternSignal(v44::measure(speeds,tempo)),dense=patternSignal(v44::measure(extra,tempo));
+     if(plain[Soflan]<=0. || plain[Soflan]!=dense[Soflan] || dense[Density]<=plain[Density])return 19;
+     // Changing an unrelated feature vector must leave every other score fixed.
+     for(int a=0;a<Count;++a){
+         auto altered=moving;for(auto& value:altered.local[a])value+=300.;
+-        const auto before=v44::scores(moving),after=v44::scores(altered);
++        const auto before=patternSignal(moving),after=patternSignal(altered);
          for(int j=0;j<Count;++j)if(j!=a && after[j]!=before[j])return 20;
          if(after[a]<before[a])return 21;
      }

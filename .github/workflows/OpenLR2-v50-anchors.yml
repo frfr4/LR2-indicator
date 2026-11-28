@@ -27,6 +27,7 @@ jobs:
           shutil.copyfile(repo/'v49/grip_check.cpp',hdr/'tests/grip_check.cpp')
           subprocess.run(['git','apply','--ignore-space-change',str(repo/'v50/native.patch')],cwd=root,check=True)
           shutil.copyfile(repo/'v50/pattern50.hpp',hdr/'pattern50.hpp')
+          shutil.copyfile(repo/'v50/peak_scale50.hpp',hdr/'peak_scale50.hpp')
           subprocess.run(['g++','-O2','-std=c++17','-I'+str(hdr),'v49/export.cpp','-o','measure'],check=True)
           subprocess.run(['./measure','anchors','anchor-raw.tsv'],check=True)
       - uses: actions/upload-artifact@v4
