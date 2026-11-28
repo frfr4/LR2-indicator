@@ -1,0 +1,21 @@
+--- a/LR2/chart_radar/tests/select_render.cpp
++++ b/LR2/chart_radar/tests/select_render.cpp
+@@ -118,14 +118,14 @@
+     }
+     {
+         ChartCatalog catalog(std::string(assetDir)+"charts-v26.tsv");
+-        for (const auto& example : {std::pair<const char*,const char*>{"a2bcbceaccf8d9642e8b62723940590e","ningyo"},
+-                {"4eaf09a816e357e848d7e7333c465b87","chronomia"},{"2e2c4168d3c350de3136a0c2ad23dce3","freedom"},
+-                {"5dfeb1f40d32c9910fa2047288236433","monsther"}}) {
++        for (const auto& example : {std::pair<const char*,const char*>{"51e0a29d5c7fc9cdf5e5e8eee1ad1124","realism"},
++                {"fed59d3b700499c9207c4995d160cc9a","life-normal"},{"38616b85332037cc12924f2ae2840262","gazer"},
++                {"0216b6514a1648c25f0cfc5eb8f83974","overheat"}}) {
+             const auto axes=catalog.find(example.first,7);
+             if(!axes)return 53;
+             DrawBox(0,0,1920,1080,GetColor(18,21,25),TRUE);
+             drawPanel(canvas,*axes,false,0.,1.);
+-            const auto shot=(out/(backend+"-v50-"+example.second+".png")).string();
++            const auto shot=(out/(backend+"-v51-"+example.second+".png")).string();
+             if(SaveDrawScreenToPNG(655,135,1325,1018,shot.c_str())<0)return 54;
+         }
+     }

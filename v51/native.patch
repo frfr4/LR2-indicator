@@ -1,12 +1,13 @@
 --- a/LR2/chart_radar/axis47.hpp
 +++ b/LR2/chart_radar/axis47.hpp
-@@ -118,7 +118,23 @@
+@@ -118,7 +118,34 @@
  inline Scores axisScores(const HumanFeatures& motor,const v44::Sections& sections,
                           const Scratch47& scratch,const std::array<double,10>& stagger) {
      const auto physical=physicalAxes(motor,sections,scratch,stagger);
 -    return v50::calibratePeak(patternAxes(sections,physical),physical);
 +    const auto raw=patternAxes(sections,physical);
-+    auto output=v50::calibratePeak(raw,physical);
++    const auto prior=v50::calibratePeak(raw,physical);
++    auto output=prior;
 +    const double peak=*std::max_element(raw.begin(),raw.end());
 +    if(peak<=0.)return output;
 +    const double reference=*std::max_element(physical.begin(),physical.end());
@@ -21,6 +22,16 @@
 +    output[Density]=publish(p.distributed);
 +    output[Jack]=publish(std::max(raw[Jack],p.repeated));
 +    output[Chord]=publish(std::max(raw[Chord],p.coordinated));
++    // Reclassifying the same key strokes can move the leading demand from
++    // distributed notes to re-strikes. Retain their existing absolute unit
++    // when attribution alone would shrink all three. Leave the other five
++    // measured mechanisms alone. Stronger measured grips can grow freely.
++    const double previousGroupPeak=std::max({prior[Density],prior[Jack],prior[Chord]});
++    const double groupPeak=std::max({output[Density],output[Jack],output[Chord]});
++    if(groupPeak>0. && groupPeak<previousGroupPeak) {
++        for(auto axis:{Density,Jack,Chord})
++            output[axis]=std::round(output[axis]*(previousGroupPeak/groupPeak)*100.)/100.;
++    }
 +    return output;
  }
  
@@ -148,17 +159,40 @@
 +}
 --- a/LR2/chart_radar/tests/separation_check.cpp
 +++ b/LR2/chart_radar/tests/separation_check.cpp
-@@ -25,8 +25,8 @@
-     const double m=*std::max_element(signal.begin(),signal.end());
-     const double highest=*std::max_element(published.begin(),published.end());
+@@ -22,11 +22,10 @@
+     const auto physical=v47::physicalAxes(sections.human,sections,sections.scratch,sections.stagger);
+     const auto signal=v47::patternAxes(sections,physical);
+     const auto published=v44::scores(sections);
+-    const double m=*std::max_element(signal.begin(),signal.end());
+-    const double highest=*std::max_element(published.begin(),published.end());
++    const auto baseline=v50::calibratePeak(signal,physical);
      for (int i=0;i<Count;++i) {
 -        if (m>0. && std::abs(published[i]-signal[i]/m*highest)>.011)
 -            throw std::runtime_error("published axis proportions");
-+        if (i!=Density && i!=Jack && i!=chart_radar::Chord && std::abs(published[i]-v50::calibratePeak(signal,physical)[i])>.011)
++        if (i!=Density && i!=Jack && i!=chart_radar::Chord && std::abs(published[i]-baseline[i])>.011)
 +            throw std::runtime_error("independent timing, turntable and duration scores");
      }
      auto score=raw ? signal : published;
      for(double v:score)if(!std::isfinite(v)||v<0)throw std::runtime_error("invalid score");
+@@ -50,6 +49,18 @@
+     check(delay[Stair]>steady[Stair] && delay[Stair]>delay[Density] && delay[Tech]==0.,"evenly repeated split timing");
+     check(jack[Jack]>jack[Density]*2. && jack[Jack]>shortJack[Jack]*2. && shortJack[Jack]>steady[Jack],"same lane and run length");
+     check(fixed[chart_radar::Chord]==0. && fixed[Jack]>0. && changing[chart_radar::Chord]>0.,"confirmed changing grip");
++    // Equal two-key width, event rate and row count. Only the first sequence
++    // passes a shared finger on and returns an omitted finger.
++    const auto rotating=sample({3,6,5},{.12},240);
++    const auto disjoint=sample({3,12,48},{.12},240);
++    check(rotating[chart_radar::Chord]>rotating[Density] && disjoint[chart_radar::Chord]==0., "rotating anchors");
++    const auto interrupted=sample({3,1,3,1},{.09},160);
++    check(interrupted[chart_radar::Chord]>0. && interrupted[Jack]>0., "singleton inside returning grip");
++    check(sample({3,7,15},{.10},3)[chart_radar::Chord]==0., "widening before any return");
++    for(unsigned mask=1;mask<128;++mask) {
++        const auto heldShape=sample({mask},{.09},90);
++        check(heldShape[chart_radar::Chord]==0. && heldShape[Jack]>0.,"fixed chord vs jack");
++    }
+     const auto withFiller=sample({7,64,11,64,13,64,14,64},{.05},480,false,true);
+     check(std::abs(withFiller[chart_radar::Chord]-sample(switchGrip,{.1},240,false,true)[chart_radar::Chord])<6., "opposite-hand filler");
+     const auto fastRoll=sample(stairs,{.053},350);
 --- a/LR2/chart_radar/tests/v47_runtime_check.cpp
 +++ b/LR2/chart_radar/tests/v47_runtime_check.cpp
 @@ -52,9 +52,9 @@
