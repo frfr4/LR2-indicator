@@ -24,40 +24,59 @@ inline double grip(const Stroke& a,const Stroke& b,const Stroke& c) {
     const double span=std::sqrt((width-1.)*(.6+.4*previous));
     return rate*span*std::sqrt(double(motorPop(returns)))*std::sqrt(paired);
 }
-template<class Frames> ChordLoad chordLoad(const Frames& frames) {
-    if(frames.empty())return {};
-    std::vector<v47::PressureRow> bins(size_t(frames.back().t/v47::motorStep)+1);
-    std::array<Stroke,8> chords{};int used=0;
-    Stroke lastKey{-10.,0};int active=0;
-    for(const auto& f:frames) {
-        const unsigned mask=unsigned(f.keys)&127u;
-        if(!mask)continue;
-        Stroke current{f.t,mask};
-        if(motorPop(mask)>=2) {
-            double weight=0.;
-            // Read the chord line through single-key decorations and fixed
-            // doubles. Limit skipped distinct chords to prevent incidental
-            // matches between unrelated shapes far apart in a dense stream.
+struct Contact {double pressure=0.;unsigned fingers=0;};
+struct GripLine {
+    std::array<Stroke,8> chords{};
+    int used=0;
+    Stroke lastKey{-10.,0};
+    Contact strike(const Stroke& current) {
+        Contact result;
+        auto observe=[&](const Stroke& first,const Stroke& middle,double attenuation) {
+            const double pressure=attenuation*grip(first,middle,current);
+            const unsigned fingers=current.keys&(first.keys|middle.keys);
+            if(pressure>result.pressure)result={pressure,fingers};
+            else if(pressure>0. && pressure==result.pressure)result.fingers|=fingers;
+        };
+        if(motorPop(current.keys)>=2) {
             for(int j=used-1;j>=0 && j>=used-3;--j) {
                 const auto& middle=chords[j];
                 if(current.t-middle.t>.40)break;
                 for(int k=j-1;k>=0 && k>=j-3;--k) {
                     if(middle.t-chords[k].t>.40)break;
-                    const double skipped=double(used-1-j+j-1-k);
-                    weight=std::max(weight,grip(chords[k],middle,current)/(1.+.55*skipped));
+                    const int skipped=used-k-2;
+                    observe(chords[k],middle,1./(1.+.55*skipped));
                 }
             }
             if(used && motorPop(lastKey.keys)==1 && lastKey.t>chords[used-1].t)
-                weight=std::max(weight,grip(chords[used-1],lastKey,current));
-            if(weight>0.){bins[size_t(f.t/v47::motorStep)][0]+=weight; ++active;}
+                observe(chords[used-1],lastKey,1.);
             if(used==int(chords.size())) {
                 std::move(chords.begin()+1,chords.end(),chords.begin());--used;
             }
             chords[used++]=current;
         }
         lastKey=current;
+        return result;
     }
-    const auto summary=v47::summarizeMotor(bins,0);
-    return {summary[0],summary[1],summary[2],summary[4],double(active)};
+};
+inline double coordinatedScore(const std::array<double,10>& rates,double coverage) {
+    const double load=.20*rates[0]+.43*rates[1]+.27*rates[2]+.10*rates[4];
+    const double support=v47::ramp(coverage/.55);
+    const double excess=std::max(0.,load-65.);
+    // Beyond the ordinary Walkure calibration population, use a continuous
+    // upper tail with bounded slope for exceptionally fast, wide repeated grips.
+    return 140.*std::pow(load,.59)*(.55+.52*support)
+        + .70*excess*excess/(1.+excess/75.)*(.25+.75*support);
+}
+template<class Frames> ChordLoad chordLoad(const Frames& frames) {
+    if(frames.empty())return {};
+    std::vector<v47::PressureRow> bins(size_t(frames.back().t/v47::motorStep)+1);
+    GripLine line;int active=0;
+    for(const auto& f:frames)if(f.keys) {
+        const auto contact=line.strike({f.t,unsigned(f.keys)&127u});
+        bins[size_t(f.t/v47::motorStep)][0]+=contact.pressure;
+        if(contact.pressure>0.)++active;
+    }
+    const auto s=v47::summarizeMotor(bins,0);
+    return {s[0],s[1],s[2],s[4],double(active)};
 }
 }

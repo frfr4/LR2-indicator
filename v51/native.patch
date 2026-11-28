@@ -1,0 +1,175 @@
+--- a/LR2/chart_radar/axis47.hpp
++++ b/LR2/chart_radar/axis47.hpp
+@@ -118,7 +118,23 @@
+ inline Scores axisScores(const HumanFeatures& motor,const v44::Sections& sections,
+                          const Scratch47& scratch,const std::array<double,10>& stagger) {
+     const auto physical=physicalAxes(motor,sections,scratch,stagger);
+-    return v50::calibratePeak(patternAxes(sections,physical),physical);
++    const auto raw=patternAxes(sections,physical);
++    auto output=v50::calibratePeak(raw,physical);
++    const double peak=*std::max_element(raw.begin(),raw.end());
++    if(peak<=0.)return output;
++    const double reference=*std::max_element(physical.begin(),physical.end());
++    const double units=v50::peakUnits(std::sqrt(peak*reference));
++    const auto publish=[&](double score) {
++        score=std::round(score*100.)/100.;
++        const double value=score<=peak ? score*(units/peak) :
++            v50::peakUnits(std::sqrt(score*reference));
++        return std::round(value*100.)/100.;
++    };
++    const auto& p=sections.pattern;
++    output[Density]=publish(p.distributed);
++    output[Jack]=publish(std::max(raw[Jack],p.repeated));
++    output[Chord]=publish(std::max(raw[Chord],p.coordinated));
++    return output;
+ }
+ 
+ inline double physicalRating(const Scores& scores) {
+--- a/LR2/chart_radar/catalog.hpp
++++ b/LR2/chart_radar/catalog.hpp
+@@ -51,10 +51,10 @@
+         if (status!=SQLITE_OK) {cache.reset();return;}
+         sqlite3_busy_timeout(ptr,350);
+         sqlite3_exec(ptr,"PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL",nullptr,nullptr,nullptr);
+-        if (sqlite3_exec(ptr,"CREATE TABLE IF NOT EXISTS radar_v50_chart (hash TEXT,mode INTEGER,"
++        if (sqlite3_exec(ptr,"CREATE TABLE IF NOT EXISTS radar_v51_chart (hash TEXT,mode INTEGER,"
+                 "a INTEGER,b INTEGER,c INTEGER,d INTEGER,e INTEGER,f INTEGER,g INTEGER,h INTEGER,"
+                 "end_spike INTEGER,shortfall INTEGER,hard REAL,PRIMARY KEY(hash,mode))",nullptr,nullptr,nullptr)!=SQLITE_OK) {cache.reset();return;}
+-        readCache(ptr,"SELECT * FROM radar_v50_chart",entries);
++        readCache(ptr,"SELECT * FROM radar_v51_chart",entries);
+         if (sqlite3_exec(ptr,"CREATE TABLE IF NOT EXISTS radar_hard_poor_v1 "
+                 "(hash TEXT,mode INTEGER,cents INTEGER,PRIMARY KEY(hash,mode))",nullptr,nullptr,nullptr)==SQLITE_OK) {
+             auto q=query(ptr,"SELECT hash,mode,cents FROM radar_hard_poor_v1");
+@@ -85,6 +85,8 @@
+             while(sqlite3_step(q.get())==SQLITE_ROW && sqlite3_column_text(q.get(),0))
+                 gaugeKinds.emplace(reinterpret_cast<const char*>(sqlite3_column_text(q.get(),0)),sqlite3_column_int(q.get(),1));
+         }
++        auto v50Modes=query(ptr,"SELECT 1 FROM sqlite_master WHERE type='table' AND name='radar_v50_chart'");
++        if(sqlite3_step(v50Modes.get())==SQLITE_ROW)readCache(ptr,"SELECT * FROM radar_v50_chart WHERE mode<>7",entries);
+         auto v49Modes=query(ptr,"SELECT 1 FROM sqlite_master WHERE type='table' AND name='radar_v49_chart'");
+         if(sqlite3_step(v49Modes.get())==SQLITE_ROW)readCache(ptr,"SELECT * FROM radar_v49_chart WHERE mode<>7",entries);
+         auto v47Modes=query(ptr,"SELECT 1 FROM sqlite_master WHERE type='table' AND name='radar_v47_chart'");
+@@ -174,7 +176,7 @@
+         const auto path=std::filesystem::u8path(file);
+         readTable(path,baseline);
+         readTable(path.parent_path()/"charts-v40.tsv",legacy,&poor);
+-        readTable(path.parent_path()/"charts-v50.tsv",entries,&poor,false);
++        readTable(path.parent_path()/"charts-v51.tsv",entries,&poor,false);
+         readSummaries(path.parent_path()/"selection-v47.tsv");
+         grades.load(path.parent_path()/"tiers-v40.tsv");
+         std::ifstream ids(path.parent_path()/"physical-v26.tsv");
+@@ -308,7 +310,7 @@
+             std::lock_guard<std::mutex> lock(mutex);
+             if (entries.emplace(key(hash,mode),result).second && cache) {
+                 try {
+-                    auto put=query(cache.get(),"INSERT OR REPLACE INTO radar_v50_chart VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)");
++                    auto put=query(cache.get(),"INSERT OR REPLACE INTO radar_v51_chart VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)");
+                     sqlite3_bind_text(put.get(),1,hash.c_str(),-1,SQLITE_TRANSIENT);
+                     sqlite3_bind_int(put.get(),2,mode);
+                     for (int i=0;i<Count;++i) sqlite3_bind_int64(put.get(),3+i,displayCents(value[i]));
+--- a/LR2/chart_radar/pattern50.hpp
++++ b/LR2/chart_radar/pattern50.hpp
+@@ -1,11 +1,12 @@
+ #pragma once
+ #include "mechanics47.hpp"
++#include "chordjack.hpp"
+ 
+ namespace chart_radar::v50 {
+ using v47::motorPop;
+ using v47::ramp;
+ using v47::urgency;
+-struct Load { double notes{},delay{},tech{},jack{},chord{},stamina{}; };
++struct Load { double notes{},delay{},tech{},jack{},chord{},stamina{},distributed{},repeated{},coordinated{}; };
+ struct Hit { double t,beat,gap; unsigned keys,holds; };
+ 
+ // Mark both repetitions, including the opening of a motif. Local lookahead is
+@@ -121,12 +122,19 @@
+     std::vector<v47::PressureRow> bins(size_t(h.back().t/v47::motorStep)+1);
+     struct AnchorTrack { Omissions omissions; unsigned previous=0; double time=-100.; };
+     std::array<AnchorTrack,7> anchors{};
++    v51::GripLine gripLine;
++    size_t coordinatedRows=0;
++    std::vector<v47::PressureRow> gripBins(bins.size());
+     std::array<double,7> last{},prior{};last.fill(-100.);prior.fill(-100.);
+     for(size_t i=0;i<h.size();++i) {
+         const auto& f=h[i];auto& bin=bins[size_t(f.t/v47::motorStep)];
+         const unsigned prev=i?h[i-1].keys:0;
+         const double split=splitEffort(h,i);
+-        double jackSquares=0.,freshNotes=0.;
++        const auto contact=gripLine.strike({f.t,f.keys});
++        auto& corrected=gripBins[size_t(f.t/v47::motorStep)];
++        corrected[v47::MChord]+=contact.pressure;
++        coordinatedRows+=contact.pressure>0.;
++        double jackSquares=0.,freshNotes=0.,coordinatedJacks=0.,distributed=0.;
+         for(int k=0;k<7;++k)if(f.keys&(1u<<k)) {
+             const double dt=f.t-last[k],old=last[k]-prior[k];
+             const double pressure=rehit(dt);
+@@ -139,12 +147,21 @@
+             // an incidental shared key between unrelated dense rows.
+             const double stroke=pressure*(isolated+1.22*chain);
+             jackSquares+=stroke*stroke;
+-            freshNotes+=1.-.77*ramp(pressure*(.24+.45*adjacent+.61*chain));
++            const double fresh=1.-.77*ramp(pressure*(.24+.45*adjacent+.61*chain));
++            freshNotes+=fresh;
++            const double involved=(contact.fingers&(1u<<k)) ? ramp(contact.pressure) : 0.;
++            distributed+=fresh*(1.-.72*involved);
++            // A finger can repeat at speed as its partner changes. Credit the
++            // measured restrike even when its preceding interval was different.
++            const double repeated=stroke+.78*involved*pressure*(1.-chain);
++            coordinatedJacks+=repeated*repeated;
+             prior[k]=last[k];last[k]=f.t;
+         }
+         const int width=motorPop(f.keys);
+         bin[v47::MNotes]+=freshNotes*(.72+.28/width)*(1.-.65*ramp(split));
+         bin[v47::MJack]+=std::sqrt(jackSquares);
++        corrected[v47::MJack]+=std::sqrt(coordinatedJacks);
++        corrected[v47::MNotes]+=distributed*(.72+.28/width)*(1.-.65*ramp(split));
+         // An unrelated strike between two grips does not release their anchor.
+         // Parallel surviving anchors describe one change, so use its largest
+         // contribution once. This also makes the result independent of lane order.
+@@ -187,8 +204,15 @@
+     }
+     const double delay=rate(v47::MDelay),jack=rate(v47::MJack);
+     const double tech=rate(v47::MTech),chord=rate(v47::MChord);
++    const auto distinct=v47::summarizeMotor(gripBins,v47::MNotes);
++    const double dispersed=.15*distinct[0]+.36*distinct[1]+.24*distinct[2]+.25*distinct[4];
++    const auto actualJacks=v47::summarizeMotor(gripBins,v47::MJack);
++    const double repeated=.18*actualJacks[0]+.50*actualJacks[1]+.32*actualJacks[2];
++    const auto coordination=v47::summarizeMotor(gripBins,v47::MChord);
++    const double coverage=double(coordinatedRows)/h.size();
+     return {12.5*std::pow(stream,1.27),720.*std::asinh(delay/13.5),
+             68.*std::pow(tech,1.31),720.*std::asinh(jack/15.0),
+-            134.*chord,400.*peakDebt};
+-}
+-}
++            134.*chord,400.*peakDebt,12.5*std::pow(dispersed,1.27),
++            720.*std::asinh(repeated/15.),v51::coordinatedScore(coordination,coverage)};
++}
++}
+--- a/LR2/chart_radar/tests/separation_check.cpp
++++ b/LR2/chart_radar/tests/separation_check.cpp
+@@ -25,8 +25,8 @@
+     const double m=*std::max_element(signal.begin(),signal.end());
+     const double highest=*std::max_element(published.begin(),published.end());
+     for (int i=0;i<Count;++i) {
+-        if (m>0. && std::abs(published[i]-signal[i]/m*highest)>.011)
+-            throw std::runtime_error("published axis proportions");
++        if (i!=Density && i!=Jack && i!=chart_radar::Chord && std::abs(published[i]-v50::calibratePeak(signal,physical)[i])>.011)
++            throw std::runtime_error("independent timing, turntable and duration scores");
+     }
+     auto score=raw ? signal : published;
+     for(double v:score)if(!std::isfinite(v)||v<0)throw std::runtime_error("invalid score");
+--- a/LR2/chart_radar/tests/v47_runtime_check.cpp
++++ b/LR2/chart_radar/tests/v47_runtime_check.cpp
+@@ -52,9 +52,9 @@
+         sqlite3* raw=nullptr;
+         check(sqlite3_open(dbFile.string().c_str(),&raw)==SQLITE_OK,"open cache");
+         Database db(raw,sqlite3_close);
+-        command(raw,"CREATE TABLE IF NOT EXISTS radar_v49_chart(hash TEXT,mode INTEGER,a INTEGER,b INTEGER,c INTEGER,d INTEGER,e INTEGER,f INTEGER,g INTEGER,h INTEGER,end_spike INTEGER,shortfall INTEGER,hard REAL,PRIMARY KEY(hash,mode))");
++        command(raw,"CREATE TABLE IF NOT EXISTS radar_v50_chart(hash TEXT,mode INTEGER,a INTEGER,b INTEGER,c INTEGER,d INTEGER,e INTEGER,f INTEGER,g INTEGER,h INTEGER,end_spike INTEGER,shortfall INTEGER,hard REAL,PRIMARY KEY(hash,mode))");
+         command(raw,"CREATE TABLE IF NOT EXISTS selection_stats_v44(hash TEXT,mode INTEGER,average REAL,maximum REAL,easy REAL,hard REAL,PRIMARY KEY(hash,mode))");
+-        command(raw,"INSERT OR REPLACE INTO radar_v49_chart VALUES('dddddddddddddddddddddddddddddddd',7,1,2,3,4,5,6,7,8,0,4,5.1),('dddddddddddddddddddddddddddddddd',5,1,2,3,4,5,0,7,8,0,4,NULL)");
++        command(raw,"INSERT OR REPLACE INTO radar_v50_chart VALUES('dddddddddddddddddddddddddddddddd',7,1,2,3,4,5,6,7,8,0,4,5.1),('dddddddddddddddddddddddddddddddd',5,1,2,3,4,5,0,7,8,0,4,NULL)");
+         command(raw,"INSERT OR REPLACE INTO selection_stats_v44 VALUES('dddddddddddddddddddddddddddddddd',7,777,778,9,10),('dddddddddddddddddddddddddddddddd',5,77,78,NULL,NULL)");
+     }
+     {
