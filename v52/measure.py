@@ -8,7 +8,7 @@ sys.path.insert(0,'v49')
 sys.path.insert(0,'v48')
 from rebuild import restore_headers
 
-def run(shard):
+def run(shard,training=False):
     repo=Path.cwd()
     with ZipFile('RadarV40.zip') as archive:
         tests={line.split()[0] for line in archive.read('tests/test-labels.tsv').decode().splitlines()}
@@ -16,7 +16,13 @@ def run(shard):
         key,_,_,hard,_=line.split()
         if hard!='.':tests.add(key)
     bundled={line.split()[0] for line in Path('v51/charts-v51.tsv').read_text().splitlines()}
-    targets=[k for k in sorted(tests|bundled) if int(k[:8],16)%4==shard]
+    if training:
+        with ZipFile('v47/data.zip') as archive:
+            population={line.split()[0].decode() for line in archive.read('charts-v47.tsv').splitlines()}
+        population-=tests|bundled
+        targets=[k for k in sorted(population) if int(k[:8],16)%8==shard]
+    else:
+        targets=[k for k in sorted(tests|bundled) if int(k[:8],16)%4==shard]
     charts=Path('inputs');charts.mkdir(exist_ok=True)
     with ZipFile('v44/data.zip') as archive:
         for path in archive.namelist():
@@ -57,4 +63,4 @@ def run(shard):
     subprocess.run([sys.executable,str(repo/'v51/install.py')],cwd=root,check=True)
     subprocess.run(['g++','-O2','-std=c++17','-I'+str(hdr),'v52/export.cpp','-o','measure'],check=True)
     subprocess.run(['./measure',str(charts),str(out/'features.tsv')],check=True)
-if __name__=='__main__':run(int(sys.argv[1]))
+if __name__=='__main__':run(int(sys.argv[1]),'--training' in sys.argv)
