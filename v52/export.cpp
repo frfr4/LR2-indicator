@@ -1,5 +1,6 @@
 #include "model44.hpp"
 #include "presentation.hpp"
+#include "pressure.hpp"
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -26,7 +27,13 @@ int main(int argc,char** argv) try {
         for(const auto& group:{m.dose,m.peak,m.sustained})for(auto a:detailOrder)out<<'\t'<<group[a];
         auto trait=assessPassages(chart.notes,7,chart.total).traits;
         out<<'\t'<<int(trait.endSpike||m.gaugePath[gauge47::EndingSpike]!=0.)<<'\t'<<trait.recoveryShortfall
-           <<'\t'<<extraPoorCents(gaugeNoteCount(chart),int(chart.total))<<'\n';
+           <<'\t'<<extraPoorCents(gaugeNoteCount(chart),int(chart.total));
+        double mainBpm=0.;const auto frames=v37::timeline(chart,tempo,mainBpm);
+        for(double v:v52::pressure(frames))out<<'\t'<<v;
+        for(auto a:detailOrder)for(auto v:m.human[a])out<<'\t'<<v;
+        for(auto v:m.gaugePath)out<<'\t'<<v;
+        for(auto v:m.scratch)out<<'\t'<<v;
+        out<<'\n';
     }
     return out.good()?0:2;
 } catch(const std::exception& e) { std::cerr<<e.what()<<'\n';return 3; }
