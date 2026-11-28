@@ -1,0 +1,59 @@
+name: Measure chordjack controls, Stella and Walkure
+on:
+  push:
+    branches: [radar-v51-chordjack]
+    paths: ['.github/workflows/OpenLR2-v51-measure.yml', 'v51/measure-version']
+permissions:
+  contents: read
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [review, catalog, anchors]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        if: matrix.group == 'catalog'
+        with:
+          repository: darksabun/darksabun.github.io
+          ref: 8e7f5e49207ee49326c0d3dc75a246506bffb48e
+          path: public-darksabun
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        if: matrix.group == 'catalog'
+        with:
+          repository: TristanDavis97/Sabuns
+          ref: 2df4a9dd2fe8fd215c2c52da7de0ca8380c8f02f
+          path: public-sabuns
+          persist-credentials: false
+      - uses: actions/cache@v4
+        with:
+          path: charts/
+          key: v51-chart-inputs-v1-${{ matrix.group }}
+      - if: matrix.group == 'catalog'
+        run: python v49/scan.py charts public-darksabun public-sabuns
+      - run: python v51/collect.py ${{ matrix.group }}
+      - name: Native inputs and grip diagnostics
+        shell: python
+        run: |
+          import sys,shutil,subprocess
+          from pathlib import Path
+          sys.path.insert(0,'v48')
+          from rebuild import restore_headers
+          repo=Path.cwd();tmp=repo/'work';tmp.mkdir()
+          hdr=restore_headers(repo,tmp);root=hdr.parent.parent
+          for p in (repo/'v49').glob('*.hpp'):shutil.copyfile(p,hdr/p.name)
+          subprocess.run(['git','apply','--ignore-space-change',str(repo/'v49/native.patch')],cwd=root,check=True)
+          shutil.copyfile(repo/'v49/grip_check.cpp',hdr/'tests/grip_check.cpp')
+          subprocess.run(['git','apply','--ignore-space-change',str(repo/'v50/native.patch')],cwd=root,check=True)
+          for p in (repo/'v50').glob('*.hpp'):shutil.copyfile(p,hdr/p.name)
+          subprocess.run(['g++','-O2','-std=c++17','-I'+str(hdr),'v51/inspect.cpp','-o','inspect'],check=True)
+          subprocess.run(['./inspect','charts','metrics'],check=True)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: grip-metrics-${{ matrix.group }}
+          path: metrics/
