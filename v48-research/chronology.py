@@ -49,6 +49,17 @@ for p,j in people.items():matched[j]=p in roster
 selections={'oct2018':valid&(t<=1540724400),'may2019':valid&(t<=1557137719),'jan2018':valid&(t<=1514764800)}
 if roster:
     selections['roster_oct2018']=selections['oct2018']&matched[u];selections['roster_final']=matched[u]
+try:
+    url='https://web.archive.org/web/20171030134045id_/http://walkure.net:80/hakkyou/data/player.json'
+    payload=urlopen(Request(url,headers={'User-Agent':'OpenLR2 historical score research'}),timeout=25).read(8<<20)
+    if payload[:2]==b'\x1f\x8b':payload=gzip.decompress(payload)
+    if hashlib.sha256(payload).hexdigest()!='40ad9689a790da30d8e3e93120f2c054e67c684561b559c31f3ea504500b11d4':raise ValueError('2017 checksum')
+    earlier={int(r[0]) for r in json.loads(payload)}
+    assert len(earlier)==24966
+    members=np.zeros(len(people),bool)
+    for pid,k in people.items():members[k]=pid in earlier
+    selections['roster2017_final']=members[u]
+except Exception as exc:metadata['early_roster_unavailable']=type(exc).__name__
 for name,mask in selections.items():
     private=Path('private')/name;private.mkdir(parents=True,exist_ok=True)
     people_sub,v=np.unique(u[mask],return_inverse=True)

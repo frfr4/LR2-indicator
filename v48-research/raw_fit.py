@@ -19,6 +19,11 @@ W=Path(os.getenv('LAMP_BASE',SOURCE.parents[1]/'v47'))
 R=W/'lamps/inputs';O=np.load(os.getenv('LAMP_OBSERVATIONS',W/'lamps/obsA/observations.npz'))
 B=pd.read_csv(W/'base/catalog.tsv',sep='\t',index_col='md5')
 assert B.index.tolist()==O['md5'].tolist()
+fresh=SOURCE.parent/'audit/fresh/family_partition.csv'
+if fresh.exists():
+    fresh_table=pd.read_csv(fresh,index_col='md5').loc[B.index]
+    assert (B.family == fresh_table.family).all()
+    B['fresh']=fresh_table.fold
 ENT={r['md5']:r for r in json.loads((R/'official.json').read_text()) if r['entryType']=='chart'}
 gates=['easy','normal','hard','fullCombo']
 PARAM=np.array([[*[ENT[h]['clearDifficulty'][g] for g in gates],ENT[h]['chartDiscrimination']]
@@ -107,7 +112,7 @@ def observations(raw,fold,mask,th,inf,ct,target,scope):
     return np.stack(features,axis=1)
 
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('partition',choices=['fold','fold2']);ap.add_argument('--pairs',action='store_true');ap.add_argument('--all-charts',action='store_true');ap.add_argument('--mask',type=int,nargs='*');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('partition',choices=['fold','fold2','fresh']);ap.add_argument('--pairs',action='store_true');ap.add_argument('--all-charts',action='store_true');ap.add_argument('--mask',type=int,nargs='*');a=ap.parse_args()
     raw=prepare();fun=native()
     folds=B[a.partition].to_numpy(dtype='int8');assert B.groupby('family')[a.partition].nunique().max()==1
     allowed=folds.copy();allowed[~KNOWN]=-1

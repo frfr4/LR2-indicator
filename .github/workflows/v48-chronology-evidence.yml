@@ -21,6 +21,7 @@ jobs:
         persist-credentials: false
         sparse-checkout: |
           v48-research
+          v43/clear-v43.tsv
           .github/workflows/v43-lamp-inputs.yml
         sparse-checkout-cone-mode: false
     - name: Verify pinned public artifacts
@@ -34,10 +35,12 @@ jobs:
         import base64,zlib,numpy as np,pandas as pd,json
         from pathlib import Path
         root=Path('private/v47')
-        ids=sorted(r['md5'] for r in json.loads((root/'lamps/inputs/official.json').read_text()) if r['entryType']=='chart')
-        raw=zlib.decompress(base64.b64decode(Path('v48-research/folds.b64').read_bytes()))
-        folds=np.frombuffer(raw,dtype='<u2').reshape(len(ids),3)
-        pd.DataFrame(folds,index=pd.Index(ids,name='md5'),columns=['family','fold','fold2']).to_csv(root/'base/catalog.tsv',sep='\t')
+        ids=sorted(line.split()[0] for line in Path('v43/clear-v43.tsv').read_text().splitlines())
+        raw=zlib.decompress(base64.b64decode(''.join(f.read_text() for f in sorted(Path('v48-research').glob('cohort-index-*.b64')))))
+        frame=np.frombuffer(raw[:len(ids)*8],dtype='<u2').reshape(len(ids),4)
+        selected=np.unpackbits(np.frombuffer(raw[len(ids)*8:],dtype='u1'),bitorder='little')[:len(ids)]==1
+        table=pd.DataFrame(frame,index=pd.Index(ids,name='md5'),columns=['family','fold','fold2','fresh'])
+        table[selected].to_csv(root/'base/catalog.tsv',sep='\t')
         PY2
         curl -fsSL --max-time 1200 --retry 2 https://media.githubusercontent.com/media/MellDa1024/lr2ir-getplayerxml/aa3a8881c6e1d7c58ff3a68d34f7f50ff7a1124f/getplayerxml.tar.gz -o private/source.tgz
         echo '91483d5e4e2e91945a073e87d5e4fe13a17300399f0a588b061df33fedf32621  private/source.tgz' | sha256sum -c -
@@ -51,16 +54,19 @@ jobs:
         retention-days: 14
     - name: Compute fold-safe item fits from surviving historical observations
       run: |
-        for cohort in oct2018 roster_oct2018 may2019 jan2018 roster_final; do
+        for cohort in roster_final roster2017_final; do
           if [ ! -f "private/$cohort/obs.npz" ]; then continue; fi
           export LAMP_OUTPUT="results/$cohort"
           export LAMP_OBSERVATIONS="private/$cohort/obs.npz"
           python v48-research/raw_fit.py fold --pairs
           python v48-research/raw_fit.py fold2 --pairs
+          python v48-research/raw_fit.py fresh --pairs
+          python v48-research/raw_fit.py fold --all-charts
+          python v48-research/raw_fit.py fold2 --all-charts
         done
     - uses: actions/upload-artifact@v4
       if: always()
       with:
         name: v48-date-grouped-chart-estimates
-        path: results/*/known_*/*.npz
+        path: results/*/*/*.npz
         retention-days: 14
