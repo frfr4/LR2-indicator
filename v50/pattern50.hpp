@@ -82,7 +82,7 @@ inline double splitEffort(const std::vector<Hit>& h,size_t i) {
 inline double technicalEffort(const std::vector<Hit>& h,size_t i,bool learned) {
     if(learned || i<2)return 0.;
     const auto &a=h[i-2],&b=h[i-1],&c=h[i];
-    if(c.gap>.31 || b.gap>.31 || b.keys==c.keys || (a.keys==c.keys && a.keys==b.keys))return 0.;
+    if(c.gap>.31 || b.gap>.31 || b.keys==c.keys)return 0.;
     const unsigned changed=b.keys^c.keys;
     const double rush=urgency(c.gap,.30,.09);
     const double rhythm=ramp((std::abs(std::log2(c.gap/b.gap))-.22)/1.3);
@@ -128,16 +128,20 @@ template<class Frames> Load measure(const Frames& frames) {
         for(int k=0;k<7;++k)if(f.keys&(1u<<k)) {
             const double dt=f.t-last[k],old=last[k]-prior[k];
             const double pressure=rehit(dt);
-            const double chain=prior[k]<0.?0.:urgency(old,.28,.14);
+            const double alignment=prior[k]<0.?0.:
+                ramp(1.-std::abs(std::log2(std::max(.001,old)/dt))/.78);
+            const bool adjacent=(prev&(1u<<k))!=0;
+            const double chain=prior[k]<0.?0.:urgency(old,.27,.14)*alignment;
+            const double isolated=adjacent?.45:.20;
             // Two strikes already count. Sustaining a lane is costlier than
             // an incidental shared key between unrelated dense rows.
-            const double stroke=pressure*(.46+1.05*chain);
+            const double stroke=pressure*(isolated+1.22*chain);
             jackSquares+=stroke*stroke;
-            freshNotes+=.24+.76*ramp((dt-.075)/.185);
+            freshNotes+=1.-.77*ramp(pressure*(.24+.45*adjacent+.61*chain));
             prior[k]=last[k];last[k]=f.t;
         }
         const int width=motorPop(f.keys);
-        bin[v47::MNotes]+=freshNotes*(.78+.22/width)*(1.-.54*ramp(split));
+        bin[v47::MNotes]+=freshNotes*(.72+.28/width)*(1.-.65*ramp(split));
         bin[v47::MJack]+=std::sqrt(jackSquares);
         bin[v47::MChord]+=omissions.update(f,prev);
         bin[v47::MDelay]+=split;
@@ -148,9 +152,27 @@ template<class Frames> Load measure(const Frames& frames) {
         auto a=v47::summarizeMotor(bins,axis);
         return .18*a[0]+.50*a[1]+.32*a[2];
     };
-    const auto endurance=v47::summarizeMotor(bins,v47::MStamina);
-    const double stamina=std::sqrt(endurance[3]*endurance[5]);
-    return {38.*rate(v47::MNotes),72.*rate(v47::MDelay),105.*rate(v47::MTech),
-            49.*rate(v47::MJack),86.*rate(v47::MChord),32.*stamina};
+    auto notes=v47::summarizeMotor(bins,v47::MNotes);
+    // Distributed finger work includes lively passages sustained over several
+    // bars. A sub-second cluster alone does not describe a chart's NOTES.
+    const double stream=.15*notes[0]+.36*notes[1]+.24*notes[2]+.25*notes[4];
+    double moving=0.,shortDebt=0.,longDebt=0.,peakDebt=0.;
+    const double dt=v47::motorStep;
+    const double onset=1.-std::exp(-dt/1.25),slow=1.-std::exp(-dt/24.);
+    for(const auto& b:bins) {
+        moving+=onset*(b[v47::MStamina]/dt-moving);
+        const double work=std::pow(moving/18.,1.65);
+        // A pause repays accumulated work, even if a short high-NPS burst
+        // immediately precedes it. Both reserves start empty on chart entry.
+        const double recovery=1.-std::exp(-dt/(moving<6.?2.5:8.));
+        shortDebt+=recovery*(work-shortDebt);
+        longDebt+=slow*(work-longDebt);
+        peakDebt=std::max(peakDebt,std::sqrt(std::max(0.,longDebt*shortDebt)));
+    }
+    const double delay=rate(v47::MDelay),jack=rate(v47::MJack);
+    const double tech=rate(v47::MTech),chord=rate(v47::MChord);
+    return {12.5*std::pow(stream,1.27),720.*std::asinh(delay/13.5),
+            68.*std::pow(tech,1.31),720.*std::asinh(jack/15.0),
+            134.*chord,400.*peakDebt};
 }
 }
