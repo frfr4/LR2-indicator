@@ -66,7 +66,7 @@
 +    const auto shape=patternShape(sections,physical,raw);
 +    const double load=v52::physicalLoad(sections,physical,raw);
 +    const double peak=v52::peakFromInputs(v52::physicalInputs(sections,physical,raw),v52::gaugeInputs(sections),load,sections.duration,sections.heads);
-+    return v52::project(shape,peak);
++    return v52::project(sections,shape,raw,peak);
 +}
 +
  inline double physicalRating(const Scores& scores) {
@@ -74,8 +74,12 @@
      std::copy(scores.begin(),scores.end(),x.begin());
 --- a/LR2/chart_radar/catalog.hpp
 +++ b/LR2/chart_radar/catalog.hpp
-@@ -25,8 +25,6 @@
-     struct Entry { Scores scores; ChartTraits traits; std::optional<double> hard{}; };
+@@ -22,11 +22,9 @@
+ }
+ class ChartCatalog {
+     mutable std::mutex mutex;
+-    struct Entry { Scores scores; ChartTraits traits; std::optional<double> hard{}; };
++    struct Entry { Scores scores; ChartTraits traits; std::optional<double> hard{},easy{}; };
      using Entries = std::unordered_map<std::string,Entry>;
      Entries entries, baseline, legacy;
 -    v40::Grades grades;
@@ -83,7 +87,7 @@
      using PoorMap = std::unordered_map<std::string,int>;
      PoorMap poor;
      std::unordered_map<std::string,v41::SelectionStats> statistics;
-@@ -36,12 +34,11 @@
+@@ -36,12 +34,12 @@
          return mode==7 ? hash : hash+"#"+std::to_string(mode);
      }
      std::unordered_map<std::string,int> gaugeKinds;
@@ -91,13 +95,14 @@
      void readSummaries(const std::filesystem::path& path) {
          std::ifstream f(path);std::string id;v41::SelectionStats row;double easy,hard,rating;int flags;
          while(f>>id>>row.average>>row.maximum>>easy>>hard>>flags>>rating) {
++            if(entries.find(id)==entries.end())continue;
              if(flags&8)row.easy.reset();else row.easy=easy;
 -            row.hard=hard;statistics.emplace(id,row);gaugeKinds.emplace(id,flags);combinedRatings.emplace(id,rating);
 +            row.hard=hard;statistics.emplace(id,row);gaugeKinds.emplace(id,flags);
          }
      }
      void openCache(const std::string& path) {
-@@ -51,10 +48,10 @@
+@@ -51,10 +49,10 @@
          if (status!=SQLITE_OK) {cache.reset();return;}
          sqlite3_busy_timeout(ptr,350);
          sqlite3_exec(ptr,"PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL",nullptr,nullptr,nullptr);
@@ -110,7 +115,47 @@
          if (sqlite3_exec(ptr,"CREATE TABLE IF NOT EXISTS radar_hard_poor_v1 "
                  "(hash TEXT,mode INTEGER,cents INTEGER,PRIMARY KEY(hash,mode))",nullptr,nullptr,nullptr)==SQLITE_OK) {
              auto q=query(ptr,"SELECT hash,mode,cents FROM radar_hard_poor_v1");
-@@ -171,14 +168,12 @@
+@@ -65,12 +63,15 @@
+                     poor.emplace(key(hash,sqlite3_column_int(q.get(),1)),cents);
+             }
+         }
+-        if(sqlite3_exec(ptr,"CREATE TABLE IF NOT EXISTS selection_stats_v47(hash TEXT,mode INTEGER,"
++        if(sqlite3_exec(ptr,"CREATE TABLE IF NOT EXISTS selection_stats_v52(hash TEXT,mode INTEGER,"
+             "average REAL,maximum REAL,easy REAL,hard REAL,PRIMARY KEY(hash,mode))",nullptr,nullptr,nullptr)==SQLITE_OK) {
++            auto lastStats=query(ptr,"SELECT 1 FROM sqlite_master WHERE type='table' AND name='selection_stats_v47'");
++            if(sqlite3_step(lastStats.get())==SQLITE_ROW)
++                sqlite3_exec(ptr,"INSERT OR IGNORE INTO selection_stats_v52 SELECT * FROM selection_stats_v47 WHERE mode<>7",nullptr,nullptr,nullptr);
+             auto old=query(ptr,"SELECT 1 FROM sqlite_master WHERE type='table' AND name='selection_stats_v44'");
+             if(sqlite3_step(old.get())==SQLITE_ROW)
+-                sqlite3_exec(ptr,"INSERT OR IGNORE INTO selection_stats_v47 SELECT * FROM selection_stats_v44 WHERE mode<>7",nullptr,nullptr,nullptr);
+-            auto q=query(ptr,"SELECT hash,mode,average,maximum,easy,hard FROM selection_stats_v47");
++                sqlite3_exec(ptr,"INSERT OR IGNORE INTO selection_stats_v52 SELECT * FROM selection_stats_v44 WHERE mode<>7",nullptr,nullptr,nullptr);
++            auto q=query(ptr,"SELECT hash,mode,average,maximum,easy,hard FROM selection_stats_v52");
+             while(sqlite3_step(q.get())==SQLITE_ROW) {
+                 if(sqlite3_column_bytes(q.get(),0)!=32 || sqlite3_column_type(q.get(),2)==SQLITE_NULL ||
+                     sqlite3_column_type(q.get(),3)==SQLITE_NULL)continue;
+@@ -85,6 +86,8 @@
+             while(sqlite3_step(q.get())==SQLITE_ROW && sqlite3_column_text(q.get(),0))
+                 gaugeKinds.emplace(reinterpret_cast<const char*>(sqlite3_column_text(q.get(),0)),sqlite3_column_int(q.get(),1));
+         }
++        auto v51Modes=query(ptr,"SELECT 1 FROM sqlite_master WHERE type='table' AND name='radar_v51_chart'");
++        if(sqlite3_step(v51Modes.get())==SQLITE_ROW)readCache(ptr,"SELECT * FROM radar_v51_chart WHERE mode<>7",entries);
+         auto v50Modes=query(ptr,"SELECT 1 FROM sqlite_master WHERE type='table' AND name='radar_v50_chart'");
+         if(sqlite3_step(v50Modes.get())==SQLITE_ROW)readCache(ptr,"SELECT * FROM radar_v50_chart WHERE mode<>7",entries);
+         auto v49Modes=query(ptr,"SELECT 1 FROM sqlite_master WHERE type='table' AND name='radar_v49_chart'");
+@@ -155,7 +158,10 @@
+                 int cents;double hard;
+                 if (losses && in>>cents && cents>=0 && cents<=9000) {
+                     losses->emplace(id,cents);
+-                    if(in>>hard && std::isfinite(hard))entry.hard=hard;
++                    if(in>>hard && std::isfinite(hard)){
++                        entry.hard=hard;
++                        double easy;if(in>>easy && std::isfinite(easy))entry.easy=easy;
++                    }
+                 }
+                 dest.emplace(id,entry);
+             }
+@@ -171,14 +177,12 @@
          return lookup(entries,hash,mode);
      }
  public:
@@ -127,7 +172,7 @@
          std::ifstream ids(path.parent_path()/"physical-v26.tsv");
          std::string id,hash;
          while (ids>>id>>hash) physicalIndex.emplace(id,hash);
-@@ -187,8 +182,8 @@
+@@ -187,8 +191,8 @@
          }
      }
      double patternRating(const std::string& hash,int mode) const {
@@ -138,7 +183,7 @@
      }
      int gaugeFlags(const std::string& hash,int mode) const {
          std::lock_guard<std::mutex> lock(mutex);
-@@ -201,7 +196,7 @@
+@@ -201,7 +205,7 @@
      }
      std::optional<double> hardEstimate(const std::string& hash,int mode=7) const {
          if(auto entry=finalEntry(hash,mode))return entry->hard;
@@ -147,7 +192,7 @@
          return {};
      }
      std::optional<Scores> fallback(const std::string& hash,int mode=7) const {
-@@ -228,11 +223,11 @@
+@@ -228,11 +232,12 @@
          auto it=statistics.find(key(hash,mode));
          if(it!=statistics.end()) {
              auto row=it->second;
@@ -159,12 +204,22 @@
 +            if(mode==7) {
 +                const auto entry=lookup(entries,hash,mode);
 +                if(entry && entry->hard)row.hard=entry->hard;
++                if(entry && entry->easy)row.easy=entry->easy;
 +                const auto flags=gaugeKinds.find(hash);
 +                if(flags!=gaugeKinds.end() && (flags->second&8))row.easy.reset();
              }
              return row;
          }
-@@ -310,7 +305,7 @@
+@@ -242,7 +247,7 @@
+         std::lock_guard<std::mutex> lock(mutex);
+         if(!statistics.emplace(key(hash,mode),row).second || !cache)return;
+         try {
+-            auto put=query(cache.get(),"INSERT OR REPLACE INTO selection_stats_v47 VALUES(?,?,?,?,?,?)");
++            auto put=query(cache.get(),"INSERT OR REPLACE INTO selection_stats_v52 VALUES(?,?,?,?,?,?)");
+             sqlite3_bind_text(put.get(),1,hash.c_str(),-1,SQLITE_TRANSIENT);sqlite3_bind_int(put.get(),2,mode);
+             sqlite3_bind_double(put.get(),3,row.average);sqlite3_bind_double(put.get(),4,row.maximum);
+             if(row.easy)sqlite3_bind_double(put.get(),5,*row.easy);
+@@ -310,7 +315,7 @@
              std::lock_guard<std::mutex> lock(mutex);
              if (entries.emplace(key(hash,mode),result).second && cache) {
                  try {
@@ -185,8 +240,8 @@
 -            throw std::runtime_error("independent timing, turntable and duration scores");
 -    }
 +    const auto shape=v47::patternShape(sections,physical,signal);
-+    const double top=*std::max_element(published.begin(),published.end());
-+    const auto expected=v52::project(shape,top);
++    const auto load=v52::physicalLoad(sections,physical,signal);
++    const auto expected=v52::published(sections,shape,signal,v52::physicalInputs(sections,physical,signal),v52::gaugeInputs(sections),load);
 +    for (int i=0;i<Count;++i)
 +        if(std::abs(published[i]-expected[i])>.011 || (shape[i]==0. && published[i]!=0.))
 +            throw std::runtime_error("native geometry diverged from measured pattern");
@@ -195,7 +250,17 @@
      return score;
 --- a/LR2/chart_radar/tests/v47_runtime_check.cpp
 +++ b/LR2/chart_radar/tests/v47_runtime_check.cpp
-@@ -52,16 +52,16 @@
+@@ -45,6 +45,9 @@
+     {
+         std::ofstream f(dir/"clear-v43.tsv");
+         f<<hidden<<" . 1357 . 1600\n"<<overridden<<" -102 1357 . 1600\n";
++        std::ofstream table(dir/"charts-v52.tsv");
++        for(const auto& id:{overridden,regular})
++            table<<id<<" 1 2 3 4 5 6 7 8 0 0 0 15.00 -1.00\n";
+         std::ofstream summaries(dir/"selection-v47.tsv");
+         summaries<<overridden<<" 8 12 -1 15 8 115\n"<<regular<<" 8 12 -1.00 15 0 115\n";
+     }
+@@ -52,16 +55,16 @@
          sqlite3* raw=nullptr;
          check(sqlite3_open(dbFile.string().c_str(),&raw)==SQLITE_OK,"open cache");
          Database db(raw,sqlite3_close);
@@ -215,7 +280,7 @@
          check(cat.selectionStats(regular,7)->easy.value()==-1.00,"legitimate value equal to handoff sentinel survives");
          const auto result=cat.resolve(hidden,chart.string(),7,true,true);check(result.has_value(),"local resolve");
          const auto stats=cat.selectionStats(hidden,7);
-@@ -71,8 +71,8 @@
+@@ -71,8 +74,8 @@
          const auto local=v44::measure(parsed,timing);
          check(local.gaugePath[gauge47::EasyPerfectEnd]>27.19 && local.gaugePath[gauge47::EasyPerfectEnd]<27.21,"fractional TOTAL truncation");
          check(local.gaugeFlags==cat.gaugeFlags(hidden,7),"identical local and cached flags");
@@ -226,9 +291,18 @@
          check(v44::scores(local)==*result && v44::chartLamps(local,parsed.judgeRank).easy==-1.,"native chart and cache agree");
          check(cat.traits(hidden,7)->recoveryShortfall==assessPassages(parsed.notes,7,parsed.total).traits.recoveryShortfall,"LOW REC units");
      }
+@@ -80,7 +83,7 @@
+         ChartCatalog reopened(catalogPath.string(),dbFile.string());
+         check(reopened.find(hidden,7).has_value() && !reopened.selectionStats(hidden,7)->easy,"unreachable EASY persists on reopen");
+         const auto db=readOnly(dbFile.string());
+-        auto row=query(db.get(),"SELECT easy,hard FROM selection_stats_v47 WHERE hash='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' AND mode=7");
++        auto row=query(db.get(),"SELECT easy,hard FROM selection_stats_v52 WHERE hash='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' AND mode=7");
+         check(sqlite3_step(row.get())==SQLITE_ROW && sqlite3_column_type(row.get(),0)==SQLITE_NULL
+               && sqlite3_column_type(row.get(),1)!=SQLITE_NULL,"SQLite NULL EASY and populated HARD");
+     }
 --- a/LR2/chart_radar/model44.hpp
 +++ b/LR2/chart_radar/model44.hpp
-@@ -41,6 +41,10 @@
+@@ -41,6 +41,13 @@
  struct Lamps {double easy,hard;};
  inline Lamps chartLamps(const Sections& m,int rank) {
      const auto lamps=v47::chartLamps47(m,rank);
@@ -236,7 +310,29 @@
 +    const double easy=(m.gaugeFlags&8)?-1.:lamps[0];
 +    const auto physical=v47::physicalAxes(m.human,m,m.scratch,m.stagger);
 +    const auto raw=v47::patternAxes(m,physical);
-+    return {easy,v52::hardFromInputs(v52::physicalInputs(m,physical,raw),v52::gaugeInputs(m),
-+                                     m.duration,m.heads,easy,lamps[1])};
++    const auto x=v52::physicalInputs(m,physical,raw),g=v52::gaugeInputs(m);
++    const auto axes=v52::published(m,v47::patternShape(m,physical,raw),raw,x,g,v52::physicalLoad(m,physical,raw));
++    const double hard=v52::hardFromInputs(x,g,m.duration,m.heads,easy,lamps[1]);
++    const auto result=v52::extendedLamps(m,axes,easy,hard);
++    return {(m.gaugeFlags&8)?-1.:result.easy,result.hard};
  }
  }
+--- a/LR2/chart_radar/tests/select_render.cpp
++++ b/LR2/chart_radar/tests/select_render.cpp
+@@ -120,12 +120,14 @@
+         ChartCatalog catalog(std::string(assetDir)+"charts-v26.tsv");
+         for (const auto& example : {std::pair<const char*,const char*>{"51e0a29d5c7fc9cdf5e5e8eee1ad1124","realism"},
+                 {"fed59d3b700499c9207c4995d160cc9a","life-normal"},{"38616b85332037cc12924f2ae2840262","gazer"},
+-                {"0216b6514a1648c25f0cfc5eb8f83974","overheat"}}) {
++                {"0216b6514a1648c25f0cfc5eb8f83974","overheat"},
++                {"3dc2a8614c4ab1dad9ec9db83a9c9576","sumizome"},{"ee67facb8fadc96e9383a1a530f1fe54","last-battle"},
++                {"dd6a670c77100e514c8d159182cfe587","ld"},{"8bd56cf7937a7d812d1f8428e40eed13","compressed-eyes"}}) {
+             const auto axes=catalog.find(example.first,7);
+             if(!axes)return 53;
+             DrawBox(0,0,1920,1080,GetColor(18,21,25),TRUE);
+             drawPanel(canvas,*axes,false,0.,1.);
+-            const auto shot=(out/(backend+"-v51-"+example.second+".png")).string();
++            const auto shot=(out/(backend+"-v52-"+example.second+".png")).string();
+             if(SaveDrawScreenToPNG(655,135,1325,1018,shot.c_str())<0)return 54;
+         }
+     }

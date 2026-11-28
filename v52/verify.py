@@ -23,7 +23,7 @@ def expected(h):
 def inspect(args):
     src=ROOT.parent;data=rows(args.charts);clear=rows(args.clear);cases=rows(src/'v51/screens.tsv');st=rows(src/'v51/st12.tsv')
     scores={k:list(map(float,v[:8])) for k,v in data.items()}
-    if any(len(row)!=12 or not all(math.isfinite(float(v)) for v in row) for row in data.values()):raise ValueError('invalid chart table')
+    if any(len(row)!=13 or not all(math.isfinite(float(v)) for v in row) for row in data.values()):raise ValueError('invalid chart table')
     with ZipFile(args.archive) as z:
         ref={k:(int(s),int(o),float(h)) for k,s,o,h in (l.split() for l in z.read('tests/test-labels.tsv').decode().splitlines())}
     tests=list(csv.DictReader((ROOT/'validation.tsv').open(),delimiter='\t'))
@@ -32,10 +32,19 @@ def inspect(args):
     assert {k for k in data}>=set(rows(src/'v51/charts-v51.tsv'))
     assert len(cases)==8 and all(scores[k][4]==max(scores[k]) and scores[k][3]>0 for k in cases)
     assert len(st)==21 and sum(scores[k][4]>1000 for k in st)>=4
+    oj_cases=rows(ROOT/'overjoy.tsv')
+    seven=[k for k,v in oj_cases.items() if v[0]=='7']
+    assert len(seven)==10 and len(oj_cases)==14
+    m='3dc2a8614c4ab1dad9ec9db83a9c9576';b='ee67facb8fadc96e9383a1a530f1fe54'
+    ld='dd6a670c77100e514c8d159182cfe587';ce='8bd56cf7937a7d812d1f8428e40eed13'
+    assert scores[m][0]>3000 and scores[m][3]>2000 and scores[m][1]<scores[m][3]
+    assert all(float(data[m][i])>max(float(data[k][i]) for k in oj_cases if k!=m) for i in [11,12])
+    assert scores[b][1]==max(scores[b]) and scores[ld][3]==max(scores[ld]) and scores[ce][2]==max(scores[ce])
+    assert min(max(scores[k]) for k in seven)>1000
     groups=[f'★{i}' for i in range(1,25)]+[f'★★{i}' for i in range(7)]
     stats={};point={};ss=[]
     for r in tests:
-        k=r['md5'];truth=int(clear[k][2])/100;raw=float(data[k][-1]);record=int(clear[k][3])/100;top=max(scores[k])
+        k=r['md5'];truth=int(clear[k][2])/100;raw=float(data[k][11]);record=int(clear[k][3])/100;top=max(scores[k])
         assert abs(top-float(r['peak']))<=.025 and abs(raw-float(r['chart_hard']))<=.011
         assert abs(truth-float(r['hard']))<1e-8
         buckets=['전체']+(['미사용 곡군'] if r['group']=='held-out' else [])

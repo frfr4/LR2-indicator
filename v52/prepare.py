@@ -96,15 +96,12 @@ def main(args):
     hard_x=np.c_[small,F[:,[27,28]]]
     hd,hp=bases(hard_x[dev],clusters=70)
     hc=ridge(hd,np.clip(hard[dev]-F[dev,28],-4.,4.),np.where(hard[dev]>25,1.8,1.),8.)
-    h_all,_=bases(hard_x,hp)
-    reliable=switch((F[:,29]-20)/32)*switch((F[:,30]-100)/180)
-    local_hard=np.round(F[:,28]+reliable*np.clip(.5*(h_all@hc),-2.,2.),2)
-    local_hard=np.where(F[:,27]>=0,np.maximum(local_hard,F[:,27]),local_hard)
     export(outdir/'weights52.hpp.gz',aux,main,cut,cal,(hp,hc))
-    shapes=F[:,16:24];mx=np.max(shapes,axis=1);score=np.round(r[:,None]*(shapes/np.maximum(1.e-9,mx[:,None]))**1.25,2)
-    with (outdir/'charts-v52.tsv').open('w') as f:
-        for k,ss,featureset,h52 in zip(K,score,F,local_hard):
-            f.write(k+'\t'+'\t'.join(f'{v:.2f}' for v in ss)+'\t'+'\t'.join(str(round(x)) for x in featureset[62:65])+'\t'+f'{h52:.2f}\n')
+    from publish import publish
+    publish(Path(args.include),args.features,outdir/'weights52.hpp.gz',outdir/'charts-v52.tsv')
+    rows=read(outdir/'charts-v52.tsv')
+    score=np.array([rows[k][:8] for k in K],float)
+    local_hard=np.array([float(rows[k][11]) for k in K])
     with (outdir/'validation.tsv').open('w') as f:
         f.write('md5\tgroup\tstar\toj\thard\tpeak\tchart_hard\taxis\n')
         for k,v,m,fv,split,anc,h52 in zip(K,score,M,F,blind,anchor,local_hard):
@@ -115,4 +112,4 @@ def main(args):
         print(name,mask.sum(),brief(np.max(score[mask],axis=1),M[mask]))
     print('sources',len(K),'families',len(set(G[known&blind])),'official',known.sum(),'anchors',anchor.sum(),flush=True)
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('--features',nargs='+',required=True);p.add_argument('--archive',required=True);p.add_argument('--windows',required=True);p.add_argument('--output',required=True);main(p.parse_args())
+    p=argparse.ArgumentParser();p.add_argument('--features',nargs='+',required=True);p.add_argument('--archive',required=True);p.add_argument('--windows',required=True);p.add_argument('--include',required=True);p.add_argument('--output',required=True);main(p.parse_args())

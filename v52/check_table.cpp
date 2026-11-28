@@ -31,11 +31,12 @@ int main(int argc,char**argv) try {
             if(shape!=measured)throw std::runtime_error("native shape mismatch "+id);
             const double load=v52::physicalLoad(s,physical,raw);
             const auto x=v52::physicalInputs(s,physical,raw),g=v52::gaugeInputs(s);
-            const auto result=v52::project(measured,v52::peakFromInputs(x,g,load,s.duration,s.heads));
+            const auto result=v52::published(s,measured,raw,x,g,load);
             output<<id;
             for(auto a:detailOrder)output<<'\t'<<result[a];
             for(size_t i=62;i<65;++i)output<<'\t'<<int(f[i]);
-            output<<'\t'<<v52::hardFromInputs(x,g,s.duration,s.heads,f[27],f[28])<<'\n';
+            const auto lamps=v52::extendedLamps(s,result,f[27],v52::hardFromInputs(x,g,s.duration,s.heads,f[27],f[28]));
+            output<<'\t'<<lamps.hard<<'\t'<<((int(f[287])&1)?-1.:lamps.easy)<<'\n';
         }
     }
     return output.good()?0:2;

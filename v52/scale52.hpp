@@ -111,12 +111,53 @@ inline double peakFromInputs(Inputs x,const Inputs& gauge,double load,double dur
     peak=supported*peak+(1.-supported)*shortScale;
     return std::clamp(peak,std::max(0.,load-600.),2.2*load);
 }
-inline Scores project(const Scores& measured,double peak) {
+// Preserve distinct short-burst and sustained rates beyond the densely sampled part of the scale.
+inline Scores project(const v44::Sections& sections,const Scores& measured,const Scores& raw,double peak) {
     const double strongest=*std::max_element(measured.begin(),measured.end());
     Scores result{};
     if(strongest<=0. || peak<=0.)return result;
-    for(size_t i=0;i<result.size();++i)
-        result[i]=std::round(100.*peak*std::pow(measured[i]/strongest,1.25))/100.;
+    const auto& pressure=sections.pressure;
+    const double span=std::max(.5,sections.duration);
+    const double one=pressure[4]*std::min(1.,span);
+    const double four=pressure[44]*std::min(1.,span/4.);
+    const double twelve=pressure[84]*std::min(1.,span/12.);
+    const double persistence=std::sqrt(one*four);
+    const double dense=smooth((persistence-65.)/30.);
+    const double sustained=smooth((persistence-46.)/16.)*smooth((peak-870.)/60.);
+    const double overrange=std::max({smooth((peak-880.)/75.),sustained,dense});
+    auto load=raw;
+    load[Density]=sections.pattern.distributed;
+    load[Jack]=std::max(load[Jack],sections.pattern.repeated);
+    load[Chord]=std::max(load[Chord],sections.pattern.coordinated);
+    for(size_t i=0;i<result.size();++i) {
+        const double share=measured[i]/strongest;
+        const double relative=std::pow(share,1.25);
+        const double retention=i==Stamina ? std::sqrt(std::min(1.,twelve/std::max(1.,one))) : 1.;
+        const double specialist=.72*std::max(0.,load[i]-1100.)*share*retention;
+        result[i]=peak*relative+overrange*specialist;
+    }
+    // Hundreds of key heads across adjacent windows are a demand even when the same
+    // notes also belong to a jack or a stagger. A lone wide chord cannot pass this test.
+    const double burst=std::max(0.,.65*persistence+.35*one-65.);
+    result[Density]=std::max(result[Density],dense*(780.+12.*burst));
+    const double endurance=smooth((twelve-58.)/24.);
+    result[Stamina]=std::max(result[Stamina],endurance*(800.+18.*std::max(0.,twelve-58.)));
+    for(auto& value:result)value=std::round(100.*value)/100.;
     return result;
+}
+inline Scores published(const v44::Sections& sections,const Scores& shape,const Scores& raw,const Inputs& x,
+                        const Inputs& gauge,double load) {
+    return project(sections,shape,raw,peakFromInputs(x,gauge,load,sections.duration,sections.heads));
+}
+struct LampPair {double easy,hard;};
+inline LampPair extendedLamps(const v44::Sections& m,const Scores& axes,double easy,double hard) {
+    const double top=*std::max_element(axes.begin(),axes.end());
+    const double specialist=std::log2(1.+std::max(0.,top-1000.)/850.);
+    const auto& gauge=m.gaugePath;
+    const double lateShare=std::sqrt(std::clamp(gauge[gauge47::TailRate]/std::max(1.,gauge[gauge47::PeakRate]),0.,1.));
+    const auto excess=[&](int channel) {return std::log2(std::max(1.,gauge[channel]/92.));};
+    const double easyExtra=2.65*excess(gauge47::EasyCap)+1.35*specialist*(.25+.75*lateShare);
+    const double hardExtra=2.85*excess(gauge47::HardCap)+1.55*specialist;
+    return {std::round(100.*(easy+easyExtra))/100.,std::round(100.*(hard+hardExtra))/100.};
 }
 }
