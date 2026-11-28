@@ -4,6 +4,7 @@ from zipfile import ZipFile
 import subprocess, shutil, sys, time
 sys.path.insert(0,'v50')
 from collect import fetch_chart
+sys.path.insert(0,'v49')
 sys.path.insert(0,'v48')
 from rebuild import restore_headers
 
@@ -25,6 +26,23 @@ def run(shard):
         if not (charts/(key+'.bms')).is_file():
             fetch_chart(charts,key)
             time.sleep(.25)
+    missing={k for k in targets if not (charts/(k+'.bms')).exists()}
+    if missing:
+        from scan import collect
+        import zipfile
+        temp_inputs=Path('public-inputs')
+        temp_inputs.mkdir(exist_ok=True)
+        sources=[('darksabun/darksabun.github.io','8e7f5e49207ee49326c0d3dc75a246506bffb48e'),('TristanDavis97/Sabuns','2df4a9dd2fe8fd215c2c52da7de0ca8380c8f02f')]
+        for repository,revision in sources:
+            root=temp_inputs/repository.split('/')[1]
+            subprocess.run(['git','init','-q',str(root)],check=True)
+            subprocess.run(['git','-C',str(root),'fetch','--quiet','--depth=1','https://github.com/'+repository,revision],check=True)
+            subprocess.run(['git','-C',str(root),'checkout','--quiet','FETCH_HEAD'],check=True)
+            with zipfile.ZipFile(temp_inputs/'wanted.zip','w') as subset:
+                subset.writestr('charts-v47.tsv',''.join(k+'\n' for k in missing))
+            collect(temp_inputs/'wanted.zip',[root],charts)
+            missing={k for k in missing if not (charts/(k+'.bms')).exists()}
+            if not missing:break
     out=Path('metrics');out.mkdir(exist_ok=True)
     (out/'missing.txt').write_text(''.join(k+'\n' for k in targets if not (charts/(k+'.bms')).is_file()))
     temp=repo/'work';temp.mkdir()
