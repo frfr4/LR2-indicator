@@ -72,7 +72,8 @@ inline double splitEffort(const std::vector<Hit>& h,size_t i) {
     double pulse=f.gap;
     if(count) {std::sort(gaps.begin(),gaps.begin()+count);pulse=gaps[(count-1)*3/4];}
     const double contrast=ramp((pulse/f.gap-1.24)/1.06);
-    const double fine=urgency(f.gap,.051,.024);
+    // Uniform ultrafast rolls still require separate finger timings at high BPM.
+    const double fine=urgency(f.gap,.063,.037);
     const double subdivision=ramp((f.beat/f.gap-5.0)/3.)*urgency(f.gap,.088,.040);
     const double precision=std::max({fine,contrast*urgency(f.gap,.106,.045),subdivision});
     const double independent=double(motorPop(fresh))/motorPop(f.keys);
@@ -118,7 +119,8 @@ template<class Frames> Load measure(const Frames& frames) {
     if(h.empty())return {};
     const auto learned=repeatedMotifs(h);
     std::vector<v47::PressureRow> bins(size_t(h.back().t/v47::motorStep)+1);
-    Omissions omissions;
+    struct AnchorTrack { Omissions omissions; unsigned previous=0; double time=-100.; };
+    std::array<AnchorTrack,7> anchors{};
     std::array<double,7> last{},prior{};last.fill(-100.);prior.fill(-100.);
     for(size_t i=0;i<h.size();++i) {
         const auto& f=h[i];auto& bin=bins[size_t(f.t/v47::motorStep)];
@@ -143,7 +145,21 @@ template<class Frames> Load measure(const Frames& frames) {
         const int width=motorPop(f.keys);
         bin[v47::MNotes]+=freshNotes*(.72+.28/width)*(1.-.65*ramp(split));
         bin[v47::MJack]+=std::sqrt(jackSquares);
-        bin[v47::MChord]+=omissions.update(f,prev);
+        // An unrelated strike between two grips does not release their anchor.
+        // Parallel surviving anchors describe one change, so use its largest
+        // contribution once. This also makes the result independent of lane order.
+        double chord=0.;
+        for(int k=0;k<7;++k) {
+            auto& track=anchors[k];
+            if(!(f.keys&(1u<<k))) {
+                if(f.keys&track.previous)track=AnchorTrack{};
+                continue;
+            }
+            auto grip=f;grip.gap=std::max(.001,f.t-track.time);
+            chord=std::max(chord,track.omissions.update(grip,track.previous));
+            track.previous=f.keys;track.time=f.t;
+        }
+        bin[v47::MChord]+=chord;
         bin[v47::MDelay]+=split;
         bin[v47::MTech]+=technicalEffort(h,i,learned[i]);
         bin[v47::MStamina]+=width*(.68+.32/width);

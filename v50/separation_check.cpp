@@ -40,6 +40,10 @@ int main() try {
     check(delay[Stair]>steady[Stair]+250. && delay[Stair]>delay[Density] && delay[Tech]==0.,"evenly repeated split timing");
     check(jack[Jack]>jack[Density]*2. && jack[Jack]>shortJack[Jack]*2. && shortJack[Jack]>steady[Jack],"same lane and run length");
     check(fixed[chart_radar::Chord]==0. && fixed[Jack]>0. && changing[chart_radar::Chord]>fixed[chart_radar::Chord]+50.,"confirmed changing grip");
+    const auto withFiller=sample({7,64,11,64,13,64,14,64},{.05},480);
+    check(std::abs(withFiller[chart_radar::Chord]-changing[chart_radar::Chord])<6., "opposite-hand filler");
+    const auto fastRoll=sample(stairs,{.053},350);
+    check(fastRoll[Stair]>steady[Stair]+200. && fastRoll[Tech]==0.,"uniform ultrafast roll");
     check(changing[Tech]==0. && sample({1,4,16,64,16,4},{.05,.125},210)[Tech]==0.,"repeating motifs");
     check(platter[Scratch]>0. && platter[Scratch]==*std::max_element(platter.begin(),platter.end()),"isolated platter");
     check(scroll[Soflan]>steady[Soflan] && steady[Soflan]==0.,"speed changes");

@@ -3,8 +3,9 @@ import base64, hashlib, json, time, urllib.request, urllib.error
 from pathlib import Path
 
 def get_controls(folder):
-    for line in Path('v50/video.tsv').read_text(encoding='utf8').splitlines():
-        key,title=line.split('\t')
+    targets=Path('v50/video.tsv').read_text(encoding='utf8').splitlines()+Path('v50/controls.tsv').read_text(encoding='utf8').splitlines()
+    for line in targets:
+        key=line.split('\t',1)[0]
         dest=folder/(key+'.bms')
         if dest.is_file():continue
         url='https://bms-score-viewer-backend.sayakaisbaka.workers.dev/bms/score/get?md5='+key
