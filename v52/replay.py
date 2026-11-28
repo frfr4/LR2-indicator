@@ -12,7 +12,14 @@ def main(shard):
     assert keys
     for key in keys:
         fetch_chart(charts,key)
-        assert hashlib.md5((charts/(key+'.bms')).read_bytes()).hexdigest()==key
+        blob=(charts/(key+'.bms')).read_bytes()
+        assert hashlib.md5(blob).hexdigest()==key
+        try:
+            body=blob.decode('utf-8-sig')
+        except UnicodeDecodeError:
+            body=blob.decode('cp932',errors='replace')
+        title=next((line[7:].strip() for line in body.splitlines() if line.upper().startswith('#TITLE ')),key)
+        print('CHART_TITLE '+key+' '+title,flush=True)
     temp=repo/'replay';temp.mkdir();hdr=restore_headers(repo,temp);root=hdr.parent.parent
     for f in (repo/'v49').glob('*.hpp'):shutil.copyfile(f,hdr/f.name)
     for tag in ('v49','v50'):

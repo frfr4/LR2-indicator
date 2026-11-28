@@ -38,7 +38,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@v4
         with:
-          ref: da542acf4f32f51e389ceeb0befe1a864b753cab
+          ref: ffbb09c0773a6a8c4cd2bdf2dc37091a458d31a2
           path: candidate
           sparse-checkout: v52
           persist-credentials: false
