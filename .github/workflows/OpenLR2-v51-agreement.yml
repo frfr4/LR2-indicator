@@ -1,0 +1,27 @@
+name: Audit released v51 difficulty agreement
+on:
+  push:
+    branches: [audit-v51-difficulty-agreement]
+    paths: ['.github/workflows/OpenLR2-v51-agreement.yml','audit51/measure.py']
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/cache@v4
+        with:
+          path: inputs/
+          key: v51-frozen-hard-inputs-1-${{ matrix.shard }}
+      - run: python audit51/measure.py ${{ matrix.shard }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v51-hard-agreement-${{ matrix.shard }}
+          path: metrics/
