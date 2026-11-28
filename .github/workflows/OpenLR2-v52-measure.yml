@@ -1,0 +1,28 @@
+name: Measure v52 physical calibration inputs
+on:
+  push:
+    branches: [radar-v52-agreement]
+    paths: ['.github/workflows/OpenLR2-v52-measure.yml', 'v52/measure.py', 'v52/export.cpp']
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/cache@v4
+        with:
+          path: inputs/
+          key: v52-physical-inputs-1-${{ matrix.shard }}
+      - run: python v52/measure.py ${{ matrix.shard }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v52-measure-${{ matrix.shard }}
+          path: metrics/
+
