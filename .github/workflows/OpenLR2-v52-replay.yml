@@ -1,0 +1,53 @@
+name: Replay extreme native chart and gauge cases
+on:
+  push:
+    branches: [radar-v52-agreement]
+    paths: ['.github/workflows/OpenLR2-v52-replay.yml','v52/replay.py','v52/replay_one.cpp']
+permissions:
+  contents: read
+jobs:
+  replay:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - case: measure-0
+            cache: v52-physical-inputs-1-0
+          - case: measure-1
+            cache: v52-physical-inputs-1-1
+          - case: measure-2
+            cache: v52-physical-inputs-1-2
+          - case: measure-3
+            cache: v52-physical-inputs-1-3
+          - case: training-0
+            cache: v52-training-inputs-1-0
+          - case: training-1
+            cache: v52-training-inputs-1-1
+          - case: training-2
+            cache: v52-training-inputs-1-2
+          - case: training-3
+            cache: v52-training-inputs-1-3
+          - case: training-6
+            cache: v52-training-inputs-1-6
+          - case: training-7
+            cache: v52-training-inputs-1-7
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: da542acf4f32f51e389ceeb0befe1a864b753cab
+          path: candidate
+          sparse-checkout: v52
+          persist-credentials: false
+      - uses: actions/cache/restore@v4
+        with:
+          path: inputs/
+          key: ${{ matrix.cache }}
+      - run: python v52/replay.py ${{ matrix.case }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: audited-${{ matrix.case }}
+          path: audited-*.tsv
