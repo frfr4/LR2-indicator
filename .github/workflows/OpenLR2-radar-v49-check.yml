@@ -1,0 +1,32 @@
+name: OpenLR2 v49 native radar verification
+on:
+  push:
+    branches: [radar-v49-wmix]
+    paths: ['.github/workflows/OpenLR2-radar-v49-check.yml', 'v49/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  radar:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Restore pinned radar source
+        shell: python
+        run: |
+          from pathlib import Path
+          import sys
+          sys.path.insert(0, 'v48')
+          from rebuild import restore_headers
+          root = Path.cwd()
+          tmp = root/'work'
+          tmp.mkdir()
+          headers = restore_headers(root,tmp)
+          print(headers)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenLR2_native_radar_headers
+          path: work/native/LR2/chart_radar
+          retention-days: 3
