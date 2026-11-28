@@ -1,0 +1,19 @@
+name: Read independent play observations
+on:
+  push:
+    branches: [radar-v52-agreement]
+    paths: ['.github/workflows/OpenLR2-v52-history.yml', 'v52/history.py']
+permissions:
+  contents: read
+jobs:
+  extract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: python v52/history.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: non-hard-observations
+          path: observations.tsv
