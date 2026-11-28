@@ -7,6 +7,7 @@ from pathlib import Path
 import csv,gzip,hashlib,json,re,sqlite3,sys
 from array import array
 from collections import Counter
+from datetime import datetime,timezone
 from urllib.request import urlopen,Request
 import numpy as np
 
@@ -51,11 +52,13 @@ if roster:
 for name,mask in selections.items():
     private=Path('private')/name;private.mkdir(parents=True,exist_ok=True)
     people_sub,v=np.unique(u[mask],return_inverse=True)
-    np.savez_compressed(private/'obs.npz',md5=np.array(catalog),u=v.astype('int32'),i=i[mask],lamp=l[mask])
+    if len(v):np.savez_compressed(private/'obs.npz',md5=np.array(catalog),u=v.astype('int32'),i=i[mask],lamp=l[mask])
     metadata[name]={'records':int(mask.sum()),'people':len(people_sub)}
     H=np.bincount(i[mask].astype('int64')*5+l[mask]-1,minlength=len(catalog)*5).reshape(-1,5)
     with (safe/(name+'_totals.csv')).open('w') as fp:
         w=csv.writer(fp);w.writerow(['md5','people','FAILED','EASY','NORMAL','HARD','FC'])
         for h,hs in zip(catalog,H):w.writerow([h,hs.sum(),*(hs if hs.sum()>=5 else ['']*5)])
+metadata['timestamp_earliest_utc']=datetime.fromtimestamp(int(t[valid].min()),timezone.utc).isoformat()
+metadata['timestamp_latest_utc']=datetime.fromtimestamp(int(t[valid].max()),timezone.utc).isoformat()
 (safe/'coverage.json').write_text(json.dumps(metadata,indent=2))
 print(json.dumps(metadata,indent=2))
