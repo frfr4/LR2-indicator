@@ -242,6 +242,8 @@ jobs:
         run: python radar-payload/v49/install.py
       - name: Install v50 axis separation
         run: python radar-payload/v50/install.py
+      - name: Verify eight-axis maximum against Walkure anchors
+        run: python radar-payload/v50/verify_peaks.py
       - name: Configure
         run: cmake --preset windows-vs-x64
         env:
