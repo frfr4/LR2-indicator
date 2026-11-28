@@ -2,7 +2,7 @@ name: Audit released v51 difficulty agreement
 on:
   push:
     branches: [audit-v51-difficulty-agreement]
-    paths: ['.github/workflows/OpenLR2-v51-agreement.yml','audit51/measure.py']
+    paths: ['.github/workflows/OpenLR2-v51-agreement.yml', 'audit51/**', 'v51/**']
 permissions:
   contents: read
 jobs:
@@ -25,3 +25,22 @@ jobs:
         with:
           name: v51-hard-agreement-${{ matrix.shard }}
           path: metrics/
+
+  agreement:
+    needs: audit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: v51-hard-agreement-*
+          path: measurement
+      - name: Evaluate the frozen Walkure cohort against the current eight axes
+        run: python audit51/agreement.py --fresh measurement/*/fresh.tsv --output agreement --enforce
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: grade-agreement-results
+          path: agreement/
