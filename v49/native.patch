@@ -1,0 +1,271 @@
+--- a/LR2/chart_radar/axis47.hpp
++++ b/LR2/chart_radar/axis47.hpp
+@@ -1,5 +1,6 @@
+ #pragma once
+ #include "sections.hpp"
++#include "grip_scale49.hpp"
+ #include "mechanics47.hpp"
+ #include "scratch47.hpp"
+ #include "delay47.hpp"
+@@ -65,6 +66,12 @@
+                          const Scratch47& scratch,const std::array<double,10>& stagger) {
+     Scores scores{};
+     for (int a=0; a<Count; ++a) {
++        if (a==Jack || a==Chord) {
++            const double rating=a==Jack ? v49::gripScore(sections.grips.jack,v49::jackScale)
++                                        : v49::gripScore(sections.grips.chord,v49::chordScale);
++            scores[a]=std::round(100.*rating)/100.;
++            continue;
++        }
+         auto v=measuredAxis(a,motor,sections,scratch,stagger);
+         for(size_t j=0;j<v.size();++j)v[j]=measuredContinuation(v[j],observation::maximum[a][j]);
+         double estimate=0., conservative=0., typical=0.;
+--- a/LR2/chart_radar/catalog.hpp
++++ b/LR2/chart_radar/catalog.hpp
+@@ -51,10 +51,10 @@
+         if (status!=SQLITE_OK) {cache.reset();return;}
+         sqlite3_busy_timeout(ptr,350);
+         sqlite3_exec(ptr,"PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL",nullptr,nullptr,nullptr);
+-        if (sqlite3_exec(ptr,"CREATE TABLE IF NOT EXISTS radar_v47_chart (hash TEXT,mode INTEGER,"
++        if (sqlite3_exec(ptr,"CREATE TABLE IF NOT EXISTS radar_v49_chart (hash TEXT,mode INTEGER,"
+                 "a INTEGER,b INTEGER,c INTEGER,d INTEGER,e INTEGER,f INTEGER,g INTEGER,h INTEGER,"
+                 "end_spike INTEGER,shortfall INTEGER,hard REAL,PRIMARY KEY(hash,mode))",nullptr,nullptr,nullptr)!=SQLITE_OK) {cache.reset();return;}
+-        readCache(ptr,"SELECT * FROM radar_v47_chart",entries);
++        readCache(ptr,"SELECT * FROM radar_v49_chart",entries);
+         if (sqlite3_exec(ptr,"CREATE TABLE IF NOT EXISTS radar_hard_poor_v1 "
+                 "(hash TEXT,mode INTEGER,cents INTEGER,PRIMARY KEY(hash,mode))",nullptr,nullptr,nullptr)==SQLITE_OK) {
+             auto q=query(ptr,"SELECT hash,mode,cents FROM radar_hard_poor_v1");
+@@ -85,6 +85,8 @@
+             while(sqlite3_step(q.get())==SQLITE_ROW && sqlite3_column_text(q.get(),0))
+                 gaugeKinds.emplace(reinterpret_cast<const char*>(sqlite3_column_text(q.get(),0)),sqlite3_column_int(q.get(),1));
+         }
++        auto v47Modes=query(ptr,"SELECT 1 FROM sqlite_master WHERE type='table' AND name='radar_v47_chart'");
++        if(sqlite3_step(v47Modes.get())==SQLITE_ROW)readCache(ptr,"SELECT * FROM radar_v47_chart WHERE mode<>7",entries);
+         auto lastModes=query(ptr,"SELECT 1 FROM sqlite_master WHERE type='table' AND name='radar_v46_chart'");
+         if(sqlite3_step(lastModes.get())==SQLITE_ROW)readCache(ptr,"SELECT * FROM radar_v46_chart WHERE mode<>7",entries);
+         auto recentModes=query(ptr,"SELECT 1 FROM sqlite_master WHERE type='table' AND name='radar_v45_chart'");
+@@ -170,7 +172,7 @@
+         const auto path=std::filesystem::u8path(file);
+         readTable(path,baseline);
+         readTable(path.parent_path()/"charts-v40.tsv",legacy,&poor);
+-        readTable(path.parent_path()/"charts-v47.tsv",entries,&poor,false);
++        readTable(path.parent_path()/"charts-v49.tsv",entries,&poor,false);
+         readSummaries(path.parent_path()/"selection-v47.tsv");
+         grades.load(path.parent_path()/"tiers-v40.tsv");
+         std::ifstream ids(path.parent_path()/"physical-v26.tsv");
+@@ -304,7 +306,7 @@
+             std::lock_guard<std::mutex> lock(mutex);
+             if (entries.emplace(key(hash,mode),result).second && cache) {
+                 try {
+-                    auto put=query(cache.get(),"INSERT OR REPLACE INTO radar_v47_chart VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)");
++                    auto put=query(cache.get(),"INSERT OR REPLACE INTO radar_v49_chart VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)");
+                     sqlite3_bind_text(put.get(),1,hash.c_str(),-1,SQLITE_TRANSIENT);
+                     sqlite3_bind_int(put.get(),2,mode);
+                     for (int i=0;i<Count;++i) sqlite3_bind_int64(put.get(),3+i,displayCents(value[i]));
+--- a/LR2/chart_radar/display.hpp
++++ b/LR2/chart_radar/display.hpp
+@@ -78,7 +78,6 @@
+         canvas.number(pos,shown,detail);
+     };
+     if (player) drawCounter({387,567},overall,false);
+-    else drawCounter({387,482},overall>0.?overall:v44::compound(target),true);
+     for (std::size_t i=0;i<visibleAxes.size();++i)
+         drawCounter({387,599-(player?0:78+int(i+1)*Panel::songRowTrim)+static_cast<int>(std::lround(i*32.8))},target[visibleAxes[i]],true);
+ }
+--- a/LR2/chart_radar/sections.hpp
++++ b/LR2/chart_radar/sections.hpp
+@@ -3,7 +3,7 @@
+ #include "gauge_reference.hpp"
+ #include "reading45.hpp"
+ #include "passage46.hpp"
+-#include "mechanics47.hpp"
++#include "grip49.hpp"
+ #include "mini47.hpp"
+ #include "scratch47.hpp"
+ #include "delay47.hpp"
+@@ -14,6 +14,7 @@
+     v45::Reading scrollReading{};
+     v46::LocalAxes local{};
+     v47::HumanFeatures human{};
++    v49::GripFeatures grips{};
+     std::array<double,10> mini{};
+     v47::Scratch47 scratch{};
+     std::array<double,10> stagger{};
+@@ -225,6 +226,7 @@
+     out.scrollReading=v45::measureReading(chart,frames,&scrollLoads);
+     out.local=v46::passages(events,scrollLoads,frames);
+     out.human=v47::humanMechanics(frames,scrollLoads);
++    out.grips=v49::measureGrips(frames);
+     out.mini=v47::miniJacks(frames);
+     out.scratch=v47::scratchActions(chart.notes,frames);
+     out.stagger=v47::staggerActions(frames);
+--- a/LR2/chart_radar/select_canvas.hpp
++++ b/LR2/chart_radar/select_canvas.hpp
+@@ -17,7 +17,7 @@
+     bool load() {
+         const char* files[]{"song-v43.png","player-v43.png","digits.png","tiers.png","shadows.png","traits.png","rating-text-v29.png","traits-80.png","hard-poor-ink.png","selection-v41.png"};
+         constexpr int widths[]{540,540,154,68,220,274,384,274,400,274};
+-        constexpr int heights[]{850,850,52,1534,1920,48,408,648,504,180};
++        constexpr int heights[]{850,850,52,1560,1952,48,408,648,504,180};
+         for (int i=0;i<std::size(files);++i) {
+             int w=0,h=0;
+             if (textures[i]>=0 && GetGraphSize(textures[i],&w,&h)==0 && w==widths[i] && h==heights[i]) continue;
+@@ -54,15 +54,22 @@
+         sprite({60,dest},60,src,420,850-src,plate);
+     }
+     void labels(bool player) {
+-        struct Label {int u,v,w,h;};
+-        static constexpr Label labels[]={{273,40,58,18},{415,81,58,19},{448,231,55,18},{405,425,78,19},
+-            {234,498,72,19},{53,425,77,19},{27,231,46,19},{65,81,56,20}};
+-        for(int i=0;i<int(radarClockwise.size());++i) {
+-            const auto l=labels[i];
+-            const double a=i*(6.283185307179586/radarClockwise.size()),sn=std::sin(a);
+-            const int dx=int(std::lround(135.*sn+(sn>.2?.28:sn<-.2?-.28:0.)*l.w-.5*l.w));
+-            const int dy=int(std::lround(-132.*std::cos(a)-.5*l.h));
+-            sprite({Panel::center.x+dx,Panel::center.y+dy},l.u,l.v,l.w,l.h,player?1:0);
++        // Keep the original W-mix label offsets relative to the base octagon.
++        // Composite labels last so a high-rating polygon can pass underneath.
++        struct Label { int u, v, w, h, dx, dy; };
++        static constexpr Label labels[] = {
++            {273, 40, 58, 18,  -29, -140}, // NOTES
++            {420, 82, 49, 18,   76, -111}, // TECH (former PEAK position)
++            {448,231, 55, 18,  121,   -9}, // DELAY
++            {405,425, 78, 19,   70,  100}, // SCRATCH
++            {234,498, 72, 19,  -35,  121}, // SOF-LAN
++            { 53,425, 77, 19, -147,   99}, // STAMINA
++            { 27,231, 46, 19, -167,   -9}, // JACK
++            { 65, 81, 56, 20, -132, -113}  // CHORD
++        };
++        for (const auto& l:labels) {
++            const Point pos{Panel::center.x+l.dx,Panel::center.y+l.dy};
++            sprite(pos, l.u, l.v, l.w, l.h, player ? 1 : 0);
+         }
+     }
+     void triangle(Point a,Point b,Point c,RGB ink) {
+--- a/LR2/chart_radar/selector_native.hpp
++++ b/LR2/chart_radar/selector_native.hpp
+@@ -1,6 +1,7 @@
+ // Included only by Main.cpp of OpenLR2, after DxLib, structure and sqlite declarations.
+ #pragma once
+ #include "catalog.hpp"
++#include "grade49.hpp"
+ #include "select_canvas.hpp"
+ #include <chrono>
+ #include <future>
+@@ -13,13 +14,7 @@
+ struct NativeSelector {
+     ChartCatalog catalog{std::string(assetDir)+"charts-v26.tsv","LR2files/Database/OpenLR2-radar.db"};
+     SelectCanvas canvas;
+-    std::unordered_map<std::string,int> tiers;
+-    NativeSelector() {
+-        std::ifstream file(std::string(assetDir)+"tiers.tsv");
+-        std::string key;
+-        int label;
+-        while (file>>key>>label) if (label>=0 && label<59) tiers.emplace(key,label);
+-    }
++    RegisteredGrades tiers=readGrades(std::string(assetDir)+"tiers.tsv");
+     SelectionMotion motion;
+     std::string account,songs,requestedChart,failedChart;
+     std::future<std::optional<Scores>> chartTask;
+@@ -103,21 +98,21 @@
+         if (!target) { canvas.back(!song);canvas.labels(!song);motion.initialized=false; }
+         else {
+             motion.select(!song,key,now);
+-            drawPanel(canvas,*target,!song,(!song && profile)?profile->overall:(song?catalog.patternRating(key,item->keymode):0.),motion.progress(now));
++            drawPanel(canvas,*target,!song,(!song && profile)?profile->overall:0.,motion.progress(now));
+             if (song) {
+                 if (auto info=catalog.traits(key,item->keymode)) {
+                     canvas.chartTraits(*info);
+                     if (poorExtra) canvas.hardPoor(*poorExtra);
+                     if(catalog.gaugeFlags(key,item->keymode))canvas.gaugeMark();
+                 }
+-                const auto tag=tiers.find(key);
+-                if (tag!=tiers.end()) {
+-                    const double peak=makeView(*target).peak;
+-                    canvas.tier(tag->second,ratingColor(peak),ratingShadow(peak));
+-                }
+             }
+         }
+         if(song) {
++            const auto tag=tiers.find(key);
++            if (tag!=tiers.end()) {
++                const double peak=target ? makeView(*target).peak : 0.;
++                canvas.tier(tag->second,ratingColor(peak),ratingShadow(peak));
++            }
+             canvas.selectionRow(0,stats?stats->easy:std::optional<double>{});
+             canvas.selectionRow(1,stats?stats->hard:std::optional<double>{});
+             canvas.selectionRow(2,stats?std::optional<double>(stats->average):std::nullopt);
+--- a/LR2/chart_radar/tests/select_render.cpp
++++ b/LR2/chart_radar/tests/select_render.cpp
+@@ -1,4 +1,5 @@
+ #include "../catalog.hpp"
++#include "../grade49.hpp"
+ #include "../select_canvas.hpp"
+ #include <array>
+ #include <filesystem>
+@@ -90,6 +91,31 @@
+             if(SaveDrawScreenToPNG(705,135,1243,1025,p.c_str())<0)return 37;
+         }
+     }
++    {
++        const auto grades=readGrades(std::string(assetDir)+"tiers.tsv");
++        const std::string game="aaffdf6c3fd3731cfb577b9375381c57", model="8269c811d5fe331566baaa93c1f43baf";
++        const std::string missing(32,'f');
++        if (grades.at(game)!=5 || grades.at(model)!=59 || grades.count(missing)) return 49;
++        std::set<std::vector<unsigned>> headers;
++        for (const auto& key:{game,model,missing}) {
++            Scores sample{};sample[Density]=450.;
++            DrawBox(0,0,1920,1080,GetColor(18,21,25),TRUE);
++            drawPanel(canvas,sample,false,150.,1.);
++            const auto it=grades.find(key);
++            if (it!=grades.end()) canvas.tier(it->second,{255,255,255},RGB{0,0,0});
++            std::vector<unsigned> pixels;
++            for (int y=618;y<650;++y) for (int x=1019;x<1093;++x) pixels.push_back(DxLib::GetPixel(x,y));
++            if (!headers.insert(pixels).second) return 50;
++            const auto shot=(out/(backend+"-v49-grade-"+(key==game?"game":key==model?"model":"unlisted")+".png")).string();
++            if (SaveDrawScreenToPNG(830,602,1110,652,shot.c_str())<0) return 51;
++        }
++        for (bool player:{false,true}) {
++            DrawBox(0,0,1920,1080,GetColor(18,21,25),TRUE);
++            canvas.labels(player);
++            const auto shot=(out/(backend+(player?"-v49-labels-player.png":"-v49-labels-song.png"))).string();
++            if (SaveDrawScreenToPNG(790,240,1168,560,shot.c_str())<0) return 52;
++        }
++    }
+     if(canvas.textures[9]<0)return 16;
+     DrawBox(0,0,1920,1080,GetColor(18,21,25),TRUE);
+     for(int row=0;row<4;++row)canvas.selectionRow(row,std::array<double,4>{26.5,28.,0.,50.}[row]);
+--- a/LR2/chart_radar/tests/tech_check.cpp
++++ b/LR2/chart_radar/tests/tech_check.cpp
+@@ -24,7 +24,7 @@
+     for(auto m:{notes,jack,chord,moving,scratch,del,warp,longRun}) {
+        for(auto a:detailOrder)std::cout<<v44::scores(m)[a]<<" ";std::cout<<"\n";
+     }
+-    if(jc[Jack]<=nc[Jack] || cc[chart_radar::Chord]<=jc[chart_radar::Chord] || jc[Tech]!=0 || cc[Tech]!=0)return 2;
++    if(jc[Jack]<=nc[Jack] || cc[chart_radar::Chord]!=0. || cc[Jack]<=0. || v44::scores(moving)[chart_radar::Chord]<=0. || jc[Tech]!=0 || cc[Tech]!=0)return 2;
+     if(moving.dose[Density]!=chord.dose[Density]||moving.dose[Tech]<=chord.dose[Tech])return 3;
+     if(scratch.dose[Scratch]<=0 || scratch.dose[Density]>0 || del.dose[Stair]<=notes.dose[Stair])return 4;
+     if(warp.dose[Soflan]<=0||longRun.dose[Stamina]<=notes.dose[Stamina])return 5;
+@@ -65,7 +65,7 @@
+     if(v44::scores(moving)[Density]!=v44::scores(chord)[Density])return 25;
+     auto onlyJack=v44::scores(jack),onlyChord=v44::scores(chord),onlyDeck=v44::scores(scratch);
+     if(onlyJack[Jack]!=*std::max_element(onlyJack.begin(),onlyJack.end()))return 22;
+-    if(onlyChord[chart_radar::Chord]!=*std::max_element(onlyChord.begin(),onlyChord.end()))return 23;
++    if(onlyChord[chart_radar::Chord]!=0. || onlyChord[Jack]<=0.)return 23;
+     if(onlyDeck[Scratch]!=*std::max_element(onlyDeck.begin(),onlyDeck.end()) || onlyDeck[Scratch]<=0.)return 24;
+     if(argc==1)return 0;
+     if(argc!=4)return 9;
+--- a/LR2/chart_radar/tests/v47_runtime_check.cpp
++++ b/LR2/chart_radar/tests/v47_runtime_check.cpp
+@@ -52,9 +52,9 @@
+         sqlite3* raw=nullptr;
+         check(sqlite3_open(dbFile.string().c_str(),&raw)==SQLITE_OK,"open cache");
+         Database db(raw,sqlite3_close);
+-        command(raw,"CREATE TABLE IF NOT EXISTS radar_v46_chart(hash TEXT,mode INTEGER,a INTEGER,b INTEGER,c INTEGER,d INTEGER,e INTEGER,f INTEGER,g INTEGER,h INTEGER,end_spike INTEGER,shortfall INTEGER,hard REAL,PRIMARY KEY(hash,mode))");
++        command(raw,"CREATE TABLE IF NOT EXISTS radar_v47_chart(hash TEXT,mode INTEGER,a INTEGER,b INTEGER,c INTEGER,d INTEGER,e INTEGER,f INTEGER,g INTEGER,h INTEGER,end_spike INTEGER,shortfall INTEGER,hard REAL,PRIMARY KEY(hash,mode))");
+         command(raw,"CREATE TABLE IF NOT EXISTS selection_stats_v44(hash TEXT,mode INTEGER,average REAL,maximum REAL,easy REAL,hard REAL,PRIMARY KEY(hash,mode))");
+-        command(raw,"INSERT OR REPLACE INTO radar_v46_chart VALUES('dddddddddddddddddddddddddddddddd',7,1,2,3,4,5,6,7,8,0,4,5.1),('dddddddddddddddddddddddddddddddd',5,1,2,3,4,5,0,7,8,0,4,NULL)");
++        command(raw,"INSERT OR REPLACE INTO radar_v47_chart VALUES('dddddddddddddddddddddddddddddddd',7,1,2,3,4,5,6,7,8,0,4,5.1),('dddddddddddddddddddddddddddddddd',5,1,2,3,4,5,0,7,8,0,4,NULL)");
+         command(raw,"INSERT OR REPLACE INTO selection_stats_v44 VALUES('dddddddddddddddddddddddddddddddd',7,777,778,9,10),('dddddddddddddddddddddddddddddddd',5,77,78,NULL,NULL)");
+     }
+     {
