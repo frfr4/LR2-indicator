@@ -1,0 +1,28 @@
+name: Compare native seven-key and hand-projected Mina measures
+on:
+  push:
+    branches: [radar-v52-agreement]
+    paths: ['.github/workflows/OpenLR2-v52-mina.yml', 'v52/mina_study.py', 'v52/mina_study.cpp']
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/cache@v4
+        with:
+          path: inputs/
+          key: v52-physical-inputs-1-${{ matrix.shard }}
+      - run: python v52/mina_study.py ${{ matrix.shard }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v52-mina-${{ matrix.shard }}
+          path: metrics/
+
