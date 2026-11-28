@@ -1,0 +1,66 @@
+name: Historical cohort validation of LR2IR graded-response estimates
+on:
+  push:
+    branches: [radar-v47-public-replay-research]
+    paths: ['v48-research/**', '.github/workflows/v48-chronology-evidence.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  estimate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    env:
+      OPENBLAS_NUM_THREADS: 1
+      OMP_NUM_THREADS: 2
+      LAMP_BASE: private/v47
+      LAMP_AGGREGATE_ONLY: 1
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
+        sparse-checkout: |
+          v48-research
+          .github/workflows/v43-lamp-inputs.yml
+        sparse-checkout-cone-mode: false
+    - name: Verify pinned public artifacts
+      run: |
+        mkdir -p private/v47/base private/v47/lamps/inputs aggregates results
+        python -m pip -q install numpy pandas scipy
+        base=https://raw.githubusercontent.com/naktazdim/walkure-offline/3836d501cd05da8fd8fd4fdc1881b3115399c55b/assets/data
+        curl -fsSL --max-time 90 --retry 2 "$base/recommendation-model-entries.json" -o private/v47/lamps/inputs/official.json
+        curl -fsSL --max-time 90 --retry 2 "$base/recommendation-star-rating-mapping.json" -o private/v47/lamps/inputs/star_mapping.json
+        python - <<'PY2'
+        import base64,zlib,numpy as np,pandas as pd,json
+        from pathlib import Path
+        root=Path('private/v47')
+        ids=sorted(r['md5'] for r in json.loads((root/'lamps/inputs/official.json').read_text()) if r['entryType']=='chart')
+        raw=zlib.decompress(base64.b64decode(Path('v48-research/folds.b64').read_bytes()))
+        folds=np.frombuffer(raw,dtype='<u2').reshape(len(ids),3)
+        pd.DataFrame(folds,index=pd.Index(ids,name='md5'),columns=['family','fold','fold2']).to_csv(root/'base/catalog.tsv',sep='\t')
+        PY2
+        curl -fsSL --max-time 1200 --retry 2 https://media.githubusercontent.com/media/MellDa1024/lr2ir-getplayerxml/aa3a8881c6e1d7c58ff3a68d34f7f50ff7a1124f/getplayerxml.tar.gz -o private/source.tgz
+        echo '91483d5e4e2e91945a073e87d5e4fe13a17300399f0a588b061df33fedf32621  private/source.tgz' | sha256sum -c -
+        tar xzf private/source.tgz -C private getplayerxml.db
+        python v48-research/chronology.py private/getplayerxml.db
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: v48-date-coverage
+        path: aggregates/
+        retention-days: 14
+    - name: Compute fold-safe item fits from surviving historical observations
+      run: |
+        for cohort in oct2018 roster_oct2018 may2019 jan2018 roster_final; do
+          if [ ! -f "private/$cohort/obs.npz" ]; then continue; fi
+          export LAMP_OUTPUT="results/$cohort"
+          export LAMP_OBSERVATIONS="private/$cohort/obs.npz"
+          python v48-research/raw_fit.py fold --pairs
+          python v48-research/raw_fit.py fold2 --pairs
+        done
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: v48-date-grouped-chart-estimates
+        path: results/*/known_*/*.npz
+        retention-days: 14
