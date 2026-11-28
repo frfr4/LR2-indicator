@@ -1,0 +1,42 @@
+{
+  "v47_sha256": "b32494ebb64978cd90a02a8162c0d84c9fdafca979294cf470901605bc3e04c4",
+  "frozen_sha256": "eaa50c7de5c4522679150242119e2c64832597f680a2684e3b462d3dceabd211",
+  "handoff_sha256": "0193ad68750e44694ec779391ef822b745e6264e6a1c95369bafc75c5374808f",
+  "final_sha256": "b7488df4501e177dec9aa391d18bc93bc8e16d2b5e2d19556be537c1263be2cd",
+  "exe_sha256": "051fecfa794e7845a2482a3992bff2d0732389fd2faf7383853b7eb5c5792363",
+  "updated_table_sha256": {
+    "LR2files/Theme/KCOOL_WMIX_FHD/WMIX/select/radar/clear-v43.tsv": "547469f6b6c01d891555a54b99bde2d1ec365c68b19e4e423023820643583e39",
+    "LR2files/Theme/KCOOL_WMIX_FHD/WMIX/select/radar/selection-v47.tsv": "56d5a1e700653602bd1f0fd6eb46d6410bda19f7214b7b92502f5a6d2b130829"
+  },
+  "unchanged_entries": 144,
+  "changed_entries": [
+    "LR2files/Theme/KCOOL_WMIX_FHD/WMIX/select/radar/clear-v43.tsv",
+    "LR2files/Theme/KCOOL_WMIX_FHD/WMIX/select/radar/selection-v47.tsv"
+  ],
+  "final_native": {
+    "rows": 6226,
+    "axes": 49808,
+    "official_easy": 1249,
+    "official_hard": 1236,
+    "negative_official_easy": 9,
+    "hidden_impossible_easy": 1,
+    "verified_against_existing_cache": 6226
+  },
+  "changed_in_selection_screen": {
+    "easy": 1833,
+    "hard": 1841,
+    "rating": 2891,
+    "any_of_three": 2960
+  },
+  "parent_commit": "f4f87cb4ff76b7d3eeab975372765ea750da75bf",
+  "frozen_chunks": [
+    "frozen_01.b64",
+    "frozen_02.b64",
+    "frozen_03.b64",
+    "frozen_04.b64",
+    "frozen_05.b64"
+  ],
+  "history_commit": "d20a950757a252901b11ea1a67c9bca5ad3cfac1",
+  "historical_charts": 3101,
+  "other_charts": 3125
+}
