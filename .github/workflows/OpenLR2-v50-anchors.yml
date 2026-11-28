@@ -1,0 +1,35 @@
+name: Verify Walkure anchor chart evidence
+on:
+  push:
+    branches: [radar-v50-axis-separation]
+    paths: ['.github/workflows/OpenLR2-v50-anchors.yml', 'v50/anchor-version']
+permissions:
+  contents: read
+jobs:
+  anchors:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: python v50/anchors.py
+      - name: Measure all available anchor charts with the candidate calculator
+        shell: python
+        run: |
+          import sys,shutil,subprocess
+          from pathlib import Path
+          sys.path.insert(0,'v48')
+          from rebuild import restore_headers
+          repo=Path.cwd();tmp=repo/'work';tmp.mkdir()
+          hdr=restore_headers(repo,tmp);root=hdr.parent.parent
+          for p in (repo/'v49').glob('*.hpp'):shutil.copyfile(p,hdr/p.name)
+          subprocess.run(['git','apply','--ignore-space-change',str(repo/'v49/native.patch')],cwd=root,check=True)
+          shutil.copyfile(repo/'v49/grip_check.cpp',hdr/'tests/grip_check.cpp')
+          subprocess.run(['git','apply','--ignore-space-change',str(repo/'v50/native.patch')],cwd=root,check=True)
+          shutil.copyfile(repo/'v50/pattern50.hpp',hdr/'pattern50.hpp')
+          subprocess.run(['g++','-O2','-std=c++17','-I'+str(hdr),'v49/export.cpp','-o','measure'],check=True)
+          subprocess.run(['./measure','anchors','anchor-raw.tsv'],check=True)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v50-walkure-raw-peaks
+          path: anchor-raw.tsv
