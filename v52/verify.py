@@ -39,6 +39,8 @@ def inspect(args):
     ld='dd6a670c77100e514c8d159182cfe587';ce='8bd56cf7937a7d812d1f8428e40eed13'
     assert scores[m][0]>3000 and scores[m][3]>2000 and scores[m][1]<scores[m][3]
     assert all(float(data[m][i])>max(float(data[k][i]) for k in oj_cases if k!=m) for i in [11,12])
+    eight=[k for k,v in oj_cases.items() if v[0]=='8']
+    assert all(float(data[b][i])<min(float(data[k][i]) for k in eight if k!=b) for i in [11,12])
     assert scores[b][1]==max(scores[b]) and scores[ld][3]==max(scores[ld]) and scores[ce][2]==max(scores[ce])
     assert min(max(scores[k]) for k in seven)>1000
     groups=[f'★{i}' for i in range(1,25)]+[f'★★{i}' for i in range(7)]

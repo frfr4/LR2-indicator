@@ -156,8 +156,11 @@ inline LampPair extendedLamps(const v44::Sections& m,const Scores& axes,double e
     const auto& gauge=m.gaugePath;
     const double lateShare=std::sqrt(std::clamp(gauge[gauge47::TailRate]/std::max(1.,gauge[gauge47::PeakRate]),0.,1.));
     const auto excess=[&](int channel) {return std::log2(std::max(1.,gauge[channel]/92.));};
-    const double easyExtra=2.65*excess(gauge47::EasyCap)+1.35*specialist*(.25+.75*lateShare);
-    const double hardExtra=2.85*excess(gauge47::HardCap)+1.55*specialist;
+    // A twelve-second overload allows fewer opportunities to rebuild EASY and forces HARD to survive consecutive bursts.
+    const double sustainedRate=m.pressure[84]*std::min(1.,m.duration/12.);
+    const double sustained=std::log2(std::max(1.,sustainedRate/58.));
+    const double easyExtra=1.5*sustained*lateShare+2.65*excess(gauge47::EasyCap)+1.35*specialist*(.25+.75*lateShare);
+    const double hardExtra=1.2*sustained+2.85*excess(gauge47::HardCap)+1.55*specialist;
     return {std::round(100.*(easy+easyExtra))/100.,std::round(100.*(hard+hardExtra))/100.};
 }
 }
