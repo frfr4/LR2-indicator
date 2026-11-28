@@ -1,0 +1,57 @@
+name: Measure v50 playable chart corpus
+on:
+  push:
+    branches: [radar-v50-axis-separation]
+    paths: ['.github/workflows/OpenLR2-radar-v50-measure.yml','v50/measurement-version','v50/collect.py']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: darksabun/darksabun.github.io
+          ref: 8e7f5e49207ee49326c0d3dc75a246506bffb48e
+          path: public-darksabun
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: TristanDavis97/Sabuns
+          ref: 2df4a9dd2fe8fd215c2c52da7de0ca8380c8f02f
+          path: public-sabuns
+          persist-credentials: false
+      - name: Acquire hash-matched public charts
+        run: |
+          python v49/scan.py charts public-darksabun public-sabuns
+          python v50/collect.py charts
+      - name: Measure native chart data
+        shell: python
+        run: |
+          import sys, shutil, subprocess, zipfile
+          from pathlib import Path
+          sys.path.insert(0,'v48')
+          from rebuild import restore_headers
+          repo=Path.cwd()
+          tmp=repo/'work';tmp.mkdir()
+          hdr=restore_headers(repo,tmp)
+          for p in (repo/'v49').glob('*.hpp'):shutil.copyfile(p,hdr/p.name)
+          root=hdr.parent.parent
+          subprocess.run(['git','apply','--ignore-space-change',str(repo/'v49/native.patch')],cwd=root,check=True)
+          if (repo/'v50/native.patch').exists():
+              subprocess.run(['git','apply','--ignore-space-change',str(repo/'v50/native.patch')],cwd=root,check=True)
+              shutil.copyfile(repo/'v50/pattern50.hpp',hdr/'pattern50.hpp')
+          out=repo/'measurements';out.mkdir()
+          subprocess.run(['g++','-O2','-std=c++17','-I'+str(hdr),'v49/export.cpp','-o','measure'],check=True)
+          subprocess.run(['./measure','charts',str(out/'catalog.tsv')],check=True)
+          if (repo/'v50/pattern50.hpp').exists():
+              with zipfile.ZipFile('v44/data.zip') as z:z.extractall(tmp/'fixtures')
+              subprocess.run(['./measure',str(tmp/'fixtures/samples'),str(out/'fixtures.tsv')],check=True)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v50-native-measurements
+          path: measurements/
