@@ -1,0 +1,136 @@
+--- a/LR2/chart_radar/axis47.hpp
++++ b/LR2/chart_radar/axis47.hpp
+@@ -1,6 +1,5 @@
+ #pragma once
+ #include "sections.hpp"
+-#include "grip_scale49.hpp"
+ #include "mechanics47.hpp"
+ #include "scratch47.hpp"
+ #include "delay47.hpp"
+@@ -66,10 +65,10 @@
+                          const Scratch47& scratch,const std::array<double,10>& stagger) {
+     Scores scores{};
+     for (int a=0; a<Count; ++a) {
+-        if (a==Jack || a==Chord) {
+-            const double rating=a==Jack ? v49::gripScore(sections.grips.jack,v49::jackScale)
+-                                        : v49::gripScore(sections.grips.chord,v49::chordScale);
+-            scores[a]=std::round(100.*rating)/100.;
++        if (a!=Scratch && a!=Soflan) {
++            const auto& p=sections.pattern;
++            const std::array<double,Count> motorScores={p.notes,p.delay,0.,0.,p.jack,p.tech,p.chord,p.stamina};
++            scores[a]=std::round(100.*motorScores[a])/100.;
+             continue;
+         }
+         auto v=measuredAxis(a,motor,sections,scratch,stagger);
+@@ -100,7 +99,6 @@
+             axis=std::min(axis,std::sqrt(axis*axisfit::diskScale*disk));
+             axis=std::max(axis,axisfit::platterScale*platter);
+         }
+-        if (a==Tech)axis=std::max(axis,mixedRehitFloor(sections.mini));
+         if (a==Soflan) {
+             const double original=std::round(100.*v45::readingScale*sections.scrollReading.dose())/100.;
+             axis=std::min(v46::corrected(sections,a,original),std::round(100.*v45::readingScale*v[10])/100.);
+--- a/LR2/chart_radar/catalog.hpp
++++ b/LR2/chart_radar/catalog.hpp
+@@ -51,10 +51,10 @@
+         if (status!=SQLITE_OK) {cache.reset();return;}
+         sqlite3_busy_timeout(ptr,350);
+         sqlite3_exec(ptr,"PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL",nullptr,nullptr,nullptr);
+-        if (sqlite3_exec(ptr,"CREATE TABLE IF NOT EXISTS radar_v49_chart (hash TEXT,mode INTEGER,"
++        if (sqlite3_exec(ptr,"CREATE TABLE IF NOT EXISTS radar_v50_chart (hash TEXT,mode INTEGER,"
+                 "a INTEGER,b INTEGER,c INTEGER,d INTEGER,e INTEGER,f INTEGER,g INTEGER,h INTEGER,"
+                 "end_spike INTEGER,shortfall INTEGER,hard REAL,PRIMARY KEY(hash,mode))",nullptr,nullptr,nullptr)!=SQLITE_OK) {cache.reset();return;}
+-        readCache(ptr,"SELECT * FROM radar_v49_chart",entries);
++        readCache(ptr,"SELECT * FROM radar_v50_chart",entries);
+         if (sqlite3_exec(ptr,"CREATE TABLE IF NOT EXISTS radar_hard_poor_v1 "
+                 "(hash TEXT,mode INTEGER,cents INTEGER,PRIMARY KEY(hash,mode))",nullptr,nullptr,nullptr)==SQLITE_OK) {
+             auto q=query(ptr,"SELECT hash,mode,cents FROM radar_hard_poor_v1");
+@@ -85,6 +85,8 @@
+             while(sqlite3_step(q.get())==SQLITE_ROW && sqlite3_column_text(q.get(),0))
+                 gaugeKinds.emplace(reinterpret_cast<const char*>(sqlite3_column_text(q.get(),0)),sqlite3_column_int(q.get(),1));
+         }
++        auto v49Modes=query(ptr,"SELECT 1 FROM sqlite_master WHERE type='table' AND name='radar_v49_chart'");
++        if(sqlite3_step(v49Modes.get())==SQLITE_ROW)readCache(ptr,"SELECT * FROM radar_v49_chart WHERE mode<>7",entries);
+         auto v47Modes=query(ptr,"SELECT 1 FROM sqlite_master WHERE type='table' AND name='radar_v47_chart'");
+         if(sqlite3_step(v47Modes.get())==SQLITE_ROW)readCache(ptr,"SELECT * FROM radar_v47_chart WHERE mode<>7",entries);
+         auto lastModes=query(ptr,"SELECT 1 FROM sqlite_master WHERE type='table' AND name='radar_v46_chart'");
+@@ -172,7 +174,7 @@
+         const auto path=std::filesystem::u8path(file);
+         readTable(path,baseline);
+         readTable(path.parent_path()/"charts-v40.tsv",legacy,&poor);
+-        readTable(path.parent_path()/"charts-v49.tsv",entries,&poor,false);
++        readTable(path.parent_path()/"charts-v50.tsv",entries,&poor,false);
+         readSummaries(path.parent_path()/"selection-v47.tsv");
+         grades.load(path.parent_path()/"tiers-v40.tsv");
+         std::ifstream ids(path.parent_path()/"physical-v26.tsv");
+@@ -306,7 +308,7 @@
+             std::lock_guard<std::mutex> lock(mutex);
+             if (entries.emplace(key(hash,mode),result).second && cache) {
+                 try {
+-                    auto put=query(cache.get(),"INSERT OR REPLACE INTO radar_v49_chart VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)");
++                    auto put=query(cache.get(),"INSERT OR REPLACE INTO radar_v50_chart VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)");
+                     sqlite3_bind_text(put.get(),1,hash.c_str(),-1,SQLITE_TRANSIENT);
+                     sqlite3_bind_int(put.get(),2,mode);
+                     for (int i=0;i<Count;++i) sqlite3_bind_int64(put.get(),3+i,displayCents(value[i]));
+--- a/LR2/chart_radar/sections.hpp
++++ b/LR2/chart_radar/sections.hpp
+@@ -3,7 +3,7 @@
+ #include "gauge_reference.hpp"
+ #include "reading45.hpp"
+ #include "passage46.hpp"
+-#include "grip49.hpp"
++#include "pattern50.hpp"
+ #include "mini47.hpp"
+ #include "scratch47.hpp"
+ #include "delay47.hpp"
+@@ -14,7 +14,7 @@
+     v45::Reading scrollReading{};
+     v46::LocalAxes local{};
+     v47::HumanFeatures human{};
+-    v49::GripFeatures grips{};
++    v50::Load pattern{};
+     std::array<double,10> mini{};
+     v47::Scratch47 scratch{};
+     std::array<double,10> stagger{};
+@@ -226,7 +226,7 @@
+     out.scrollReading=v45::measureReading(chart,frames,&scrollLoads);
+     out.local=v46::passages(events,scrollLoads,frames);
+     out.human=v47::humanMechanics(frames,scrollLoads);
+-    out.grips=v49::measureGrips(frames);
++    out.pattern=v50::measure(frames);
+     out.mini=v47::miniJacks(frames);
+     out.scratch=v47::scratchActions(chart.notes,frames);
+     out.stagger=v47::staggerActions(frames);
+--- a/LR2/chart_radar/tests/grip_check.cpp
++++ b/LR2/chart_radar/tests/grip_check.cpp
+@@ -1,4 +1,5 @@
+ #include "model44.hpp"
++#include "grip49.hpp"
+ #include <iostream>
+ #include <iomanip>
+ #include <stdexcept>
+--- a/LR2/chart_radar/tests/tech_check.cpp
++++ b/LR2/chart_radar/tests/tech_check.cpp
+@@ -62,7 +62,7 @@
+         for(int j=0;j<Count;++j)if(j!=a && after[j]!=before[j])return 20;
+         if(after[a]<before[a])return 21;
+     }
+-    if(v44::scores(moving)[Density]!=v44::scores(chord)[Density])return 25;
++    if(v44::scores(moving)[Density]<=v44::scores(chord)[Density] || v44::scores(chord)[Jack]<=v44::scores(chord)[Density])return 25;
+     auto onlyJack=v44::scores(jack),onlyChord=v44::scores(chord),onlyDeck=v44::scores(scratch);
+     if(onlyJack[Jack]!=*std::max_element(onlyJack.begin(),onlyJack.end()))return 22;
+     if(onlyChord[chart_radar::Chord]!=0. || onlyChord[Jack]<=0.)return 23;
+--- a/LR2/chart_radar/tests/v47_runtime_check.cpp
++++ b/LR2/chart_radar/tests/v47_runtime_check.cpp
+@@ -52,9 +52,9 @@
+         sqlite3* raw=nullptr;
+         check(sqlite3_open(dbFile.string().c_str(),&raw)==SQLITE_OK,"open cache");
+         Database db(raw,sqlite3_close);
+-        command(raw,"CREATE TABLE IF NOT EXISTS radar_v47_chart(hash TEXT,mode INTEGER,a INTEGER,b INTEGER,c INTEGER,d INTEGER,e INTEGER,f INTEGER,g INTEGER,h INTEGER,end_spike INTEGER,shortfall INTEGER,hard REAL,PRIMARY KEY(hash,mode))");
++        command(raw,"CREATE TABLE IF NOT EXISTS radar_v49_chart(hash TEXT,mode INTEGER,a INTEGER,b INTEGER,c INTEGER,d INTEGER,e INTEGER,f INTEGER,g INTEGER,h INTEGER,end_spike INTEGER,shortfall INTEGER,hard REAL,PRIMARY KEY(hash,mode))");
+         command(raw,"CREATE TABLE IF NOT EXISTS selection_stats_v44(hash TEXT,mode INTEGER,average REAL,maximum REAL,easy REAL,hard REAL,PRIMARY KEY(hash,mode))");
+-        command(raw,"INSERT OR REPLACE INTO radar_v47_chart VALUES('dddddddddddddddddddddddddddddddd',7,1,2,3,4,5,6,7,8,0,4,5.1),('dddddddddddddddddddddddddddddddd',5,1,2,3,4,5,0,7,8,0,4,NULL)");
++        command(raw,"INSERT OR REPLACE INTO radar_v49_chart VALUES('dddddddddddddddddddddddddddddddd',7,1,2,3,4,5,6,7,8,0,4,5.1),('dddddddddddddddddddddddddddddddd',5,1,2,3,4,5,0,7,8,0,4,NULL)");
+         command(raw,"INSERT OR REPLACE INTO selection_stats_v44 VALUES('dddddddddddddddddddddddddddddddd',7,777,778,9,10),('dddddddddddddddddddddddddddddddd',5,77,78,NULL,NULL)");
+     }
+     {

@@ -42,6 +42,7 @@ jobs:
           for p in (repo/'v49').glob('*.hpp'):shutil.copyfile(p,hdr/p.name)
           root=hdr.parent.parent
           subprocess.run(['git','apply','--ignore-space-change',str(repo/'v49/native.patch')],cwd=root,check=True)
+          shutil.copyfile(repo/'v49/grip_check.cpp',hdr/'tests/grip_check.cpp')
           if (repo/'v50/native.patch').exists():
               subprocess.run(['git','apply','--ignore-space-change',str(repo/'v50/native.patch')],cwd=root,check=True)
               shutil.copyfile(repo/'v50/pattern50.hpp',hdr/'pattern50.hpp')
